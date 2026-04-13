@@ -142,8 +142,22 @@ func (h *harness) sendMessage(content string) error {
 		PreviousResponseID: h.lastRespID,
 	}, h.sessionID)
 	if err != nil {
+		// Extract status code and determine retryability
+		statusCode := 0
+		retryable := false
+		if apiErr, ok := err.(*apiError); ok {
+			statusCode = apiErr.StatusCode
+			// 5xx errors and 429 are typically retryable
+			retryable = (statusCode >= 500 && statusCode < 600) || statusCode == 429
+		}
+
 		emitEvent(makeEvent(h.sessionID, msg.EventError, nil, func(e *msg.Event) {
-			e.Error = &msg.ErrorEvent{Code: "API_ERROR", Message: err.Error()}
+			e.Error = &msg.ErrorEvent{
+				Code:       "API_ERROR",
+				Message:    err.Error(),
+				StatusCode: statusCode,
+				Retryable:  retryable,
+			}
 		}))
 		emitEvent(makeEvent(h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
 			e.State = &msg.StateEvent{State: msg.SessionError, Previous: msg.SessionRunning, Reason: err.Error()}
