@@ -111,9 +111,25 @@ type responsesResult struct {
 	Cost  *msg.Cost
 }
 
+// sendOptions are per-call knobs layered onto an HTTP request to Hermes.
+type sendOptions struct {
+	// SessionID is sent as X-Hermes-Session-Id for native session continuity.
+	SessionID string
+	// IdempotencyKey dedupes retries server-side (5-minute cache). Required —
+	// callers must mint one (typically UUID4) so retries don't double-bill.
+	IdempotencyKey string
+}
+
 // sendResponses calls POST /v1/responses with streaming and translates SSE events
 // into canonical msg.Events emitted via emitEvent. Returns the final result.
-func (c *hermesClient) sendResponses(ctx context.Context, req responsesRequest, sessionID string) (*responsesResult, error) {
+func (c *hermesClient) sendResponses(ctx context.Context, req responsesRequest, opts sendOptions) (*responsesResult, error) {
+	if opts.IdempotencyKey == "" {
+		return nil, fmt.Errorf("sendResponses: IdempotencyKey required")
+	}
+	if opts.SessionID == "" {
+		return nil, fmt.Errorf("sendResponses: SessionID required")
+	}
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -124,6 +140,8 @@ func (c *hermesClient) sendResponses(ctx context.Context, req responsesRequest, 
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Idempotency-Key", opts.IdempotencyKey)
+	httpReq.Header.Set("X-Hermes-Session-Id", opts.SessionID)
 	if c.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
@@ -142,7 +160,87 @@ func (c *hermesClient) sendResponses(ctx context.Context, req responsesRequest, 
 		}
 	}
 
-	return c.parseSSEStream(resp.Body, sessionID)
+	return c.parseSSEStream(resp.Body, opts.SessionID)
+}
+
+// doJSON performs an HTTP request and decodes the JSON response body.
+// Used for non-streaming Hermes endpoints (/v1/models, /v1/responses/{id}, /health).
+func (c *hermesClient) doJSON(ctx context.Context, method, path string, out any) error {
+	httpReq, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return &apiError{
+			StatusCode: resp.StatusCode,
+			Message:    fmt.Sprintf("hermes API error: %s %s -> %d %s", method, path, resp.StatusCode, string(b)),
+		}
+	}
+
+	if out == nil {
+		return nil
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// modelsResponse is the /v1/models payload shape (OpenAI-compatible).
+type modelsResponse struct {
+	Object string `json:"object"`
+	Data   []struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		Created int64  `json:"created"`
+		OwnedBy string `json:"owned_by"`
+	} `json:"data"`
+}
+
+// listModels queries GET /v1/models and returns the advertised model IDs in order.
+func (c *hermesClient) listModels(ctx context.Context) ([]string, error) {
+	var out modelsResponse
+	if err := c.doJSON(ctx, "GET", "/v1/models", &out); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(out.Data))
+	for _, m := range out.Data {
+		ids = append(ids, m.ID)
+	}
+	return ids, nil
+}
+
+// healthCheck calls GET /v1/health and returns nil on 200.
+func (c *hermesClient) healthCheck(ctx context.Context) error {
+	return c.doJSON(ctx, "GET", "/v1/health", nil)
+}
+
+// getResponse retrieves a stored response by ID.
+func (c *hermesClient) getResponse(ctx context.Context, id string) (*responseObject, error) {
+	if id == "" {
+		return nil, fmt.Errorf("getResponse: id required")
+	}
+	var out responseObject
+	if err := c.doJSON(ctx, "GET", "/v1/responses/"+id, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// deleteResponse removes a stored response by ID.
+func (c *hermesClient) deleteResponse(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("deleteResponse: id required")
+	}
+	return c.doJSON(ctx, "DELETE", "/v1/responses/"+id, nil)
 }
 
 // parseSSEStream reads SSE events from the Hermes streaming response and

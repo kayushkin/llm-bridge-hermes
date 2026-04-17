@@ -11,22 +11,31 @@ type Config struct {
 	BaseURL string
 	// APIKey is the bearer token for Hermes API authentication.
 	APIKey string
-	// Model is the model name to send in requests (cosmetic for Hermes).
+	// Model is the model name to send in requests. Empty means the bridge
+	// will query GET /v1/models on startup and use the server-advertised name.
 	Model string
+	// ModelExplicit records whether the user pinned HERMES_MODEL. When true,
+	// model discovery must not overwrite it.
+	ModelExplicit bool
 	// Pricing configuration (USD per million tokens)
-	InputPricePerM  float64
-	OutputPricePerM float64
+	InputPricePerM     float64
+	OutputPricePerM    float64
 	ReasoningPricePerM float64
+	// Preflight controls whether the harness calls GET /health at startup.
+	Preflight bool
 }
 
 func loadConfig() Config {
+	model := os.Getenv("HERMES_MODEL")
 	return Config{
 		BaseURL:            envOr("HERMES_URL", "http://localhost:8642"),
 		APIKey:             os.Getenv("HERMES_API_KEY"),
-		Model:              envOr("HERMES_MODEL", "hermes-agent"),
-		InputPricePerM:     envFloat("HERMES_INPUT_PRICE_PER_M", 3.0),   // Default: $3/M input tokens
-		OutputPricePerM:    envFloat("HERMES_OUTPUT_PRICE_PER_M", 15.0), // Default: $15/M output tokens
+		Model:              model,
+		ModelExplicit:      model != "",
+		InputPricePerM:     envFloat("HERMES_INPUT_PRICE_PER_M", 3.0),     // Default: $3/M input tokens
+		OutputPricePerM:    envFloat("HERMES_OUTPUT_PRICE_PER_M", 15.0),   // Default: $15/M output tokens
 		ReasoningPricePerM: envFloat("HERMES_REASONING_PRICE_PER_M", 15.0), // Default: same as output
+		Preflight:          os.Getenv("HERMES_PREFLIGHT") == "1",
 	}
 }
 
