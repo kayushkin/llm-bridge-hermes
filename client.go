@@ -96,7 +96,7 @@ type toolChoice struct {
 type reasoningConfig struct {
 	Enabled bool  `json:"enabled"`
 	Budget  *int  `json:"budget,omitempty"` // Token budget for reasoning
-	Effort  string `json:"effort,omitempty"` // "low", "medium", "high"
+	Effort  string `json:"effort,omitempty"` // "low", "medium", "high", "xhigh", "max"
 }
 
 type cacheControl struct {
