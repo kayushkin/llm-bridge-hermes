@@ -419,15 +419,24 @@ func (h *harness) sendMessageDirect(content, idempotencyKey string) error {
 		h.turnMu.Unlock()
 	}()
 
-	resp, err := h.client.sendResponses(turnCtx, responsesRequest{
-		Model:              h.cfg.Model,
-		Input:              content,
-		Instructions:       h.systemPrompt,
-		Stream:             true,
-		Store:              true,
-		Conversation:       h.conversation,
-		PreviousResponseID: h.lastRespID,
-	}, sendOptions{
+	// Hermes rejects requests that set both `conversation` and
+	// `previous_response_id` simultaneously — they're two different
+	// continuation mechanisms. After the first turn we chain via the
+	// response ID and drop the conversation name; the `X-Hermes-Session-Id`
+	// header still carries the session identity across the chain.
+	req := responsesRequest{
+		Model:        h.cfg.Model,
+		Input:        content,
+		Instructions: h.systemPrompt,
+		Stream:       true,
+		Store:        true,
+	}
+	if h.lastRespID != "" {
+		req.PreviousResponseID = h.lastRespID
+	} else {
+		req.Conversation = h.conversation
+	}
+	resp, err := h.client.sendResponses(turnCtx, req, sendOptions{
 		SessionID:      h.sessionID,
 		IdempotencyKey: idempotencyKey,
 	})

@@ -63,9 +63,41 @@ llm-bridge-hermes -discover
 - **Idempotency**: Every request includes an `Idempotency-Key` header (UUID4). Callers can provide their own key for retry dedup.
 - **Session continuity**: Both `X-Hermes-Session-Id` and `conversation` name are sent on every request.
 
+## Testing
+
+Unit tests run against stubbed SSE streams and an `httptest.Server`:
+
+```bash
+go test ./...
+```
+
+Integration tests run against a **real** Hermes Agent on
+`http://127.0.0.1:8642` with a real Anthropic backend. Use the setup
+script to install Hermes, wire it to your Anthropic key, start the
+gateway, and verify a live smoke test:
+
+```bash
+# Installs hermes-agent into ~/.hermes/hermes-agent, writes config,
+# starts the gateway, and sends one /v1/responses request to prove
+# the Anthropic backend is answering end-to-end.
+./scripts/setup-hermes.sh
+
+# Then:
+go test -tags=integration -v ./...
+```
+
+The script reads `ANTHROPIC_API_KEY` from the environment; if unset,
+it falls back to model-store (`~/.config/model-store/store.db`,
+`anthropic:api` row). Hermes picks up `claude-haiku-4-5` by default
+— override with `HERMES_MODEL=<name>`.
+
+Integration tests fail fast (not skip) if the gateway isn't
+reachable, because running them is a deliberate choice.
+
 ## Known Gaps
 
 - **File/vision upload**: Blocked upstream (Hermes API doesn't support it yet)
 - **Compact/compress**: No HTTP endpoint; Hermes handles this server-side via `/compress` slash command
 - **Permission mode**: Hermes auto-approves all tools on the API path; the bridge cannot gate tool execution
 - **Chat Completions**: Only `/v1/responses` is used; `/v1/chat/completions` is not implemented
+- **Idempotency-Key dedup on streaming**: The bridge sends `Idempotency-Key` on every request, but Hermes only consults its idempotency cache on the non-streaming `/v1/responses` branch. Streaming requests always run fresh. Retries with the same key will currently double-charge.

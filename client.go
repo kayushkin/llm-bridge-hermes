@@ -333,9 +333,38 @@ type outputItem struct {
 	Name      string         `json:"name,omitempty"`
 	CallID    string         `json:"call_id,omitempty"`
 	Arguments string         `json:"arguments,omitempty"`
-	Output    string         `json:"output,omitempty"`
-	Role      string         `json:"role,omitempty"`
-	Content   []contentBlock `json:"content,omitempty"`
+	// Output is the function_call_output payload. Hermes emits it as either
+	// a plain string OR an array of content parts (e.g. `[{"type":"input_text","text":"..."}]`).
+	// RawMessage lets us accept either shape without losing data; extractOutputText
+	// normalises to a string for downstream consumers.
+	Output  json.RawMessage `json:"output,omitempty"`
+	Role    string          `json:"role,omitempty"`
+	Content []contentBlock  `json:"content,omitempty"`
+}
+
+// extractOutputText normalises the Output field of a function_call_output item
+// into a plain string. Hermes may send either a bare string or an array of
+// typed content parts; the bridge passes text through without reshaping.
+func extractOutputText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Try string first.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	// Then try an array of content parts.
+	var parts []contentBlock
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var b strings.Builder
+		for _, p := range parts {
+			b.WriteString(p.Text)
+		}
+		return b.String()
+	}
+	// Unknown shape — surface as raw JSON rather than silently dropping.
+	return string(raw)
 }
 
 type contentBlock struct {
@@ -511,7 +540,7 @@ func (c *hermesClient) translateEvent(event sseEvent, sessionID string, result *
 			emitEvent(makeEvent(sessionID, msg.EventToolResult, raw, func(e *msg.Event) {
 				e.ToolResult = &msg.ToolResultEvent{
 					ToolID: event.Item.CallID,
-					Output: event.Item.Output,
+					Output: extractOutputText(event.Item.Output),
 				}
 			}))
 		case "message":

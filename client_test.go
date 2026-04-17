@@ -154,6 +154,40 @@ func TestParseSSEStream_ToolCall(t *testing.T) {
 	}
 }
 
+func TestParseSSEStream_ToolCall_ArrayOutput(t *testing.T) {
+	// Hermes sometimes emits `output` as an array of content parts instead
+	// of a bare string. The bridge must accept both without dropping events.
+	stream := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp-arr","status":"in_progress"}}`,
+		`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc-1","name":"read","call_id":"call-1"}}`,
+		`data: {"type":"response.output_item.done","item":{"type":"function_call_output","call_id":"call-1","output":[{"type":"input_text","text":"part one "},{"type":"input_text","text":"part two"}]}}`,
+		`data: {"type":"response.completed","response":{"id":"resp-arr","status":"completed","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	c := testClient("")
+	getEvents := captureEvents(t)
+
+	if _, err := c.parseSSEStream(strings.NewReader(stream), "sess-arr"); err != nil {
+		t.Fatalf("parseSSEStream: %v", err)
+	}
+
+	events := getEvents()
+	var toolResult *msg.ToolResultEvent
+	for _, e := range events {
+		if e.Type == msg.EventToolResult && e.ToolResult != nil {
+			toolResult = e.ToolResult
+		}
+	}
+	if toolResult == nil {
+		t.Fatal("expected a tool_result event")
+	}
+	if toolResult.Output != "part one part two" {
+		t.Errorf("Output = %q, want 'part one part two'", toolResult.Output)
+	}
+}
+
 func TestParseSSEStream_Reasoning(t *testing.T) {
 	stream := strings.Join([]string{
 		`data: {"type":"response.created","response":{"id":"resp-3","status":"in_progress"}}`,
