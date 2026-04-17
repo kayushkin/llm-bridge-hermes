@@ -23,6 +23,11 @@ type Config struct {
 	ReasoningPricePerM float64
 	// Preflight controls whether the harness calls GET /health at startup.
 	Preflight bool
+	// DashboardURL is the Hermes web dashboard base URL (e.g. http://127.0.0.1:9119).
+	// Required for session discovery (-discover). Empty disables dashboard features.
+	DashboardURL string
+	// DashboardKey is an optional auth token for the dashboard API.
+	DashboardKey string
 }
 
 func loadConfig() Config {
@@ -36,6 +41,8 @@ func loadConfig() Config {
 		OutputPricePerM:    envFloat("HERMES_OUTPUT_PRICE_PER_M", 15.0),   // Default: $15/M output tokens
 		ReasoningPricePerM: envFloat("HERMES_REASONING_PRICE_PER_M", 15.0), // Default: same as output
 		Preflight:          os.Getenv("HERMES_PREFLIGHT") == "1",
+		DashboardURL:       os.Getenv("HERMES_DASHBOARD_URL"),
+		DashboardKey:       os.Getenv("HERMES_DASHBOARD_KEY"),
 	}
 }
 

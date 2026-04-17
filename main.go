@@ -37,11 +37,21 @@ func main() {
 	log.SetPrefix("[llm-bridge-hermes] ")
 
 	if len(os.Args) > 1 && os.Args[1] == "-version" {
-		fmt.Println("0.1.0")
+		fmt.Println("0.2.0")
 		os.Exit(0)
 	}
 
 	cfg := loadConfig()
+
+	if len(os.Args) > 1 && os.Args[1] == "-discover" {
+		sessions, err := discoverSessions(cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "discover: %v\n", err)
+			os.Exit(1)
+		}
+		json.NewEncoder(os.Stdout).Encode(sessions)
+		os.Exit(0)
+	}
 	h := newHarness(cfg)
 
 	sigs := make(chan os.Signal, 1)

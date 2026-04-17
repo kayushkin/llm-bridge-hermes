@@ -52,6 +52,13 @@ type responseIDParams struct {
 	ID string `json:"id"`
 }
 
+// turnRequest is a serialized message for the turn queue.
+type turnRequest struct {
+	content        string
+	idempotencyKey string
+	done           chan error
+}
+
 // harness holds the runtime state for a Hermes session.
 type harness struct {
 	cfg          Config
@@ -67,6 +74,11 @@ type harness struct {
 
 	turnMu     sync.Mutex
 	turnCancel context.CancelFunc
+
+	// queue serializes message turns so concurrent calls don't race.
+	// Started lazily on first message after start.
+	queue     chan turnRequest
+	queueOnce sync.Once
 }
 
 func newHarness(cfg Config) *harness {
@@ -76,6 +88,22 @@ func newHarness(cfg Config) *harness {
 		client: newHermesClient(cfg),
 		ctx:    ctx,
 		cancel: cancel,
+	}
+}
+
+// ensureQueue starts the turn worker goroutine if not already running.
+func (h *harness) ensureQueue() {
+	h.queueOnce.Do(func() {
+		h.queue = make(chan turnRequest, 16)
+		go h.turnWorker()
+	})
+}
+
+// turnWorker processes queued turns sequentially.
+func (h *harness) turnWorker() {
+	for req := range h.queue {
+		err := h.sendMessage(req.content, req.idempotencyKey)
+		req.done <- err
 	}
 }
 
@@ -203,11 +231,14 @@ func (h *harness) handleMessage(p messageParams) error {
 		return fmt.Errorf("no active session")
 	}
 
-	emitEvent(makeEvent(h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
-		e.State = &msg.StateEvent{State: msg.SessionRunning, Previous: msg.SessionIdle}
-	}))
-
-	return h.sendMessage(p.Content, p.IdempotencyKey)
+	h.ensureQueue()
+	req := turnRequest{
+		content:        p.Content,
+		idempotencyKey: p.IdempotencyKey,
+		done:           make(chan error, 1),
+	}
+	h.queue <- req
+	return <-req.done
 }
 
 // handleCompact surfaces an honest error — Hermes' /v1 HTTP surface does not
@@ -356,9 +387,18 @@ func (h *harness) handleForgetResponse(p responseIDParams) error {
 	return nil
 }
 
-// sendMessage issues a single /v1/responses turn. If idempotencyKey is empty,
-// a fresh UUID4 is minted. Caller-supplied keys enable retry dedup.
+// sendMessage emits running state and issues a turn. Called directly from
+// handleStart (before queue is running) and via the turn worker for queued messages.
 func (h *harness) sendMessage(content, idempotencyKey string) error {
+	emitEvent(makeEvent(h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
+		e.State = &msg.StateEvent{State: msg.SessionRunning, Previous: msg.SessionIdle}
+	}))
+	return h.sendMessageDirect(content, idempotencyKey)
+}
+
+// sendMessageDirect issues a single /v1/responses turn. If idempotencyKey is empty,
+// a fresh UUID4 is minted. Caller-supplied keys enable retry dedup.
+func (h *harness) sendMessageDirect(content, idempotencyKey string) error {
 	start := time.Now()
 	h.lastInput = content
 
@@ -452,6 +492,9 @@ func (h *harness) sendMessage(content, idempotencyKey string) error {
 
 func (h *harness) shutdown() {
 	h.cancel()
+	if h.queue != nil {
+		close(h.queue)
+	}
 }
 
 // newIdempotencyKey mints a RFC 4122 v4-style hex UUID for Idempotency-Key.
