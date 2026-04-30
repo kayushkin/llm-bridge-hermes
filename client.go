@@ -418,11 +418,15 @@ func (c *hermesClient) translateEvent(event sseEvent, sessionID string, result *
 		}))
 
 	case "response.output_text.done":
-		// Final text for verification — emit as system event for observability
-		emitEvent(makeEvent(sessionID, msg.EventSystem, raw, func(e *msg.Event) {
-			e.System = &msg.SystemEvent{
-				Subtype: "output_text_done",
-				Message: fmt.Sprintf("text complete: %d chars", len(event.Text)),
+		// Finished text content block — emit as EventBlock per the
+		// canonical contract (EventStream is reserved for the deltas above).
+		emitEvent(makeEvent(sessionID, msg.EventBlock, raw, func(e *msg.Event) {
+			e.Block = &msg.BlockEvent{
+				Index: event.ContentIndex,
+				Block: &msg.ContentBlock{
+					Type: msg.BlockText,
+					Text: &msg.TextBlock{Text: event.Text},
+				},
 			}
 		}))
 
@@ -439,10 +443,15 @@ func (c *hermesClient) translateEvent(event sseEvent, sessionID string, result *
 		}))
 
 	case "response.reasoning.done":
-		// Complete thinking block
-		emitEvent(makeEvent(sessionID, msg.EventThinking, raw, func(e *msg.Event) {
-			e.Thinking = &msg.ThinkingEvent{
-				Text: event.Reasoning,
+		// Finished thinking content block — emit as EventBlock per the
+		// canonical contract (EventStream is reserved for the deltas above).
+		emitEvent(makeEvent(sessionID, msg.EventBlock, raw, func(e *msg.Event) {
+			e.Block = &msg.BlockEvent{
+				Index: event.ContentIndex,
+				Block: &msg.ContentBlock{
+					Type:     msg.BlockThinking,
+					Thinking: &msg.ThinkingBlock{Text: event.Reasoning},
+				},
 			}
 		}))
 

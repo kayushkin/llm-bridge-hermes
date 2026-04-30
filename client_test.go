@@ -91,15 +91,24 @@ func TestParseSSEStream_TextDelta(t *testing.T) {
 	}
 
 	events := getEvents()
-	// Should have stream deltas among the events.
-	var streamCount int
+	// Should have stream deltas plus a finished EventBlock for the text.
+	var streamCount, textBlockCount int
 	for _, e := range events {
 		if e.Type == msg.EventStream && e.Stream != nil && e.Stream.Delta != nil && e.Stream.Delta.Type == msg.DeltaText {
 			streamCount++
 		}
+		if e.Type == msg.EventBlock && e.Block != nil && e.Block.Block != nil && e.Block.Block.Type == msg.BlockText {
+			textBlockCount++
+			if e.Block.Block.Text == nil || e.Block.Block.Text.Text != "Hello world!" {
+				t.Errorf("text EventBlock payload = %+v, want text 'Hello world!'", e.Block.Block.Text)
+			}
+		}
 	}
 	if streamCount != 2 {
 		t.Errorf("expected 2 text delta events, got %d", streamCount)
+	}
+	if textBlockCount != 1 {
+		t.Errorf("expected 1 text EventBlock, got %d", textBlockCount)
 	}
 }
 
@@ -211,20 +220,23 @@ func TestParseSSEStream_Reasoning(t *testing.T) {
 	}
 
 	events := getEvents()
-	var thinkingDeltas, thinkingDone int
+	var thinkingDeltas, thinkingBlocks int
 	for _, e := range events {
 		if e.Type == msg.EventStream && e.Stream != nil && e.Stream.Delta != nil && e.Stream.Delta.Type == msg.DeltaThinking {
 			thinkingDeltas++
 		}
-		if e.Type == msg.EventThinking {
-			thinkingDone++
+		if e.Type == msg.EventBlock && e.Block != nil && e.Block.Block != nil && e.Block.Block.Type == msg.BlockThinking {
+			thinkingBlocks++
+			if e.Block.Block.Thinking == nil || e.Block.Block.Thinking.Text != "Let me think about this carefully." {
+				t.Errorf("thinking EventBlock payload = %+v, want 'Let me think about this carefully.'", e.Block.Block.Thinking)
+			}
 		}
 	}
 	if thinkingDeltas != 1 {
 		t.Errorf("expected 1 thinking delta, got %d", thinkingDeltas)
 	}
-	if thinkingDone != 1 {
-		t.Errorf("expected 1 thinking event, got %d", thinkingDone)
+	if thinkingBlocks != 1 {
+		t.Errorf("expected 1 thinking EventBlock, got %d", thinkingBlocks)
 	}
 }
 

@@ -329,8 +329,8 @@ func TestMakeEvent(t *testing.T) {
 	e := makeEvent("sess", msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{Subtype: "test"}
 	})
-	if e.SessionID != "sess" {
-		t.Errorf("SessionID = %q, want sess", e.SessionID)
+	if e.HarnessSessionID != "sess" {
+		t.Errorf("HarnessSessionID = %q, want sess", e.HarnessSessionID)
 	}
 	if e.Harness != msg.HarnessHermes {
 		t.Errorf("Harness = %q, want hermes", e.Harness)
