@@ -369,6 +369,43 @@ func TestHandleStart_ColdStart(t *testing.T) {
 	_ = getEvents()
 }
 
+// TestHandleStart_ForkRejected verifies the fork-from-bridge-server path
+// returns FORK_UNSUPPORTED. Hermes fork is per-response (`previous_response_id`),
+// not per-session — silently producing a fresh chain would violate the contract,
+// so we reject the call rather than fake a fork.
+func TestHandleStart_ForkRejected(t *testing.T) {
+	h := testHarness()
+	getEvents := captureEvents(t)
+
+	err := h.handleStart(startParams{
+		BridgeSessionID: "bs_fork",
+		Fork:            "cv_parent",
+	})
+	if err == nil {
+		t.Fatal("expected error from handleStart with Fork set")
+	}
+	if !strings.Contains(err.Error(), "fork unsupported") {
+		t.Errorf("error = %v, want 'fork unsupported'", err)
+	}
+
+	events := getEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != msg.EventError {
+		t.Errorf("event type = %s, want error", events[0].Type)
+	}
+	if events[0].Error == nil || events[0].Error.Code != "FORK_UNSUPPORTED" {
+		t.Errorf("error code = %v, want FORK_UNSUPPORTED", events[0].Error)
+	}
+	if events[0].Error.Retryable {
+		t.Error("FORK_UNSUPPORTED should not be retryable")
+	}
+	if events[0].BridgeSessionID != "bs_fork" {
+		t.Errorf("event BridgeSessionID = %q, want bs_fork", events[0].BridgeSessionID)
+	}
+}
+
 func TestHandleStart_SetsState(t *testing.T) {
 	h := testHarness()
 	getEvents := captureEvents(t)

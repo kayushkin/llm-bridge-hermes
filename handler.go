@@ -31,6 +31,11 @@ type startParams struct {
 	CredentialID string `json:"credential_id,omitempty"`
 	Prompt       string `json:"prompt,omitempty"`
 	Resume       bool   `json:"resume,omitempty"`
+	// Fork is the parent's HarnessSessionID when bridge-server starts a fork.
+	// Hermes rejects this path — fork semantics in Hermes are per-response, not
+	// per-session, so callers must use the explicit `fork` JSON-RPC method with
+	// `from_response_id`. See README "Fork semantics".
+	Fork         string `json:"fork,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
 	Model        string `json:"model,omitempty"`
 }
@@ -193,6 +198,23 @@ func (h *harness) handleStart(p startParams) error {
 	}
 	h.bridgeSessionID = bridgeID
 	h.sessionID = harnessID
+
+	// Fork from bridge-server is rejected. Hermes fork is per-response
+	// (`previous_response_id`), not per-session — there is no server-side
+	// primitive to clone a conversation by name. Faking a fresh chain would
+	// silently drop all parent state and pretend a fork happened. Callers
+	// that hold a parent response id should use the explicit `fork` JSON-RPC
+	// method with `from_response_id` instead.
+	if p.Fork != "" {
+		emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+			e.Error = &msg.ErrorEvent{
+				Code:      "FORK_UNSUPPORTED",
+				Message:   "hermes does not support session-level fork; use the `fork` JSON-RPC method with `from_response_id`",
+				Retryable: false,
+			}
+		}))
+		return fmt.Errorf("fork unsupported on hermes start path")
+	}
 	if p.Resume {
 		// Canonical resume: bridge-server sends start{Resume:true} with the
 		// previous HarnessSessionID populated (Hermes's prior conversation name).

@@ -107,6 +107,15 @@ it falls back to model-store (`~/.config/model-store/store.db`,
 Integration tests fail fast (not skip) if the gateway isn't
 reachable, because running them is a deliberate choice.
 
+## Fork semantics
+
+Hermes fork is **per-response**, not per-session. The Hermes server has no primitive to clone a conversation by name — only to chain a new turn off a specific `previous_response_id`. There are two ways forks reach this bridge, and they are handled differently:
+
+1. **Bridge-server `start{fork: <parent_harness_session_id>}`** (the canonical session-fork wire) — **rejected** with `EventError{Code: "FORK_UNSUPPORTED", Retryable: false}`. Faking a fresh chain under a new conversation name would silently drop all parent state and pretend a fork happened, violating the contract. Callers that need a session-level fork should use a harness that supports it natively (e.g. claudecode, jig).
+2. **Explicit `fork` JSON-RPC method with `from_response_id`** — supported. Rebases the response chain onto the supplied `from_response_id`; the next `message()` will use it as parent instead of `lastRespID`. An optional `conversation` parameter switches the conversation name as well.
+
+In short: callers that hold a *response* id can fork; callers that hold only a *session* id cannot.
+
 ## Known Gaps
 
 - **File/vision upload**: Blocked upstream (Hermes API doesn't support it yet)
