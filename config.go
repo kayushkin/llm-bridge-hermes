@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/kayushkin/aiauth"
 )
 
 // Config holds environment-based configuration for the Hermes harness.
@@ -28,6 +31,10 @@ type Config struct {
 	DashboardURL string
 	// DashboardKey is an optional auth token for the dashboard API.
 	DashboardKey string
+	// CredentialID is the aiauth profile name to resolve into the bearer
+	// token used for the Hermes /v1 API. Populated from LLMBRIDGE_CREDENTIAL_ID
+	// and optionally overridden by the start message credential_id field.
+	CredentialID string
 }
 
 func loadConfig() Config {
@@ -43,7 +50,41 @@ func loadConfig() Config {
 		Preflight:          os.Getenv("HERMES_PREFLIGHT") == "1",
 		DashboardURL:       os.Getenv("HERMES_DASHBOARD_URL"),
 		DashboardKey:       os.Getenv("HERMES_DASHBOARD_KEY"),
+		CredentialID:       os.Getenv("LLMBRIDGE_CREDENTIAL_ID"),
 	}
+}
+
+// resolveCredentialKey looks up an aiauth profile by name and returns the
+// raw secret value (api key, token, or oauth access token) for use as the
+// Hermes bearer token. Empty credentialID returns ("", nil) so callers can
+// fall back to an explicitly-set HERMES_API_KEY.
+func resolveCredentialKey(credentialID string) (string, error) {
+	if credentialID == "" {
+		return "", nil
+	}
+
+	store := aiauth.DefaultStore()
+	profiles := store.Profiles()
+	cred, ok := profiles[credentialID]
+	if !ok {
+		return "", fmt.Errorf("credential profile %q not found in aiauth store", credentialID)
+	}
+
+	var key string
+	switch cred.Type {
+	case "api_key":
+		key = cred.Key
+	case "token":
+		key = cred.Token
+	case "oauth":
+		key = cred.Access
+	default:
+		return "", fmt.Errorf("credential %q has unsupported type %q", credentialID, cred.Type)
+	}
+	if key == "" {
+		return "", fmt.Errorf("credential %q is empty for type %q", credentialID, cred.Type)
+	}
+	return key, nil
 }
 
 func envOr(key, fallback string) string {

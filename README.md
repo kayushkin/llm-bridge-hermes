@@ -2,6 +2,23 @@
 
 Harness bridge for the [Hermes Agent](https://hermes-agent.nousresearch.com/) API. Translates between the llm-bridge subprocess protocol (NDJSON on stdin/stdout) and Hermes' OpenAI-compatible `/v1/responses` endpoint with SSE streaming.
 
+## Build
+
+This module uses local `replace` directives for `github.com/kayushkin/llm-bridge` and `github.com/kayushkin/aiauth`, so both repos must be checked out next to this one:
+
+```
+repos/
+├── aiauth/
+├── llm-bridge/
+└── llm-bridge-hermes/
+```
+
+Then:
+
+```bash
+go build -o llm-bridge-hermes
+```
+
 ## Usage
 
 ```bash
@@ -18,17 +35,12 @@ llm-bridge-hermes -discover
 
 ## Environment Variables
 
-### Required
+All variables are optional — the bridge starts with safe defaults and discovers what it can.
 
 | Variable | Description |
 |----------|-------------|
 | `HERMES_URL` | Hermes API server base URL (default: `http://localhost:8642`) |
-
-### Optional
-
-| Variable | Description |
-|----------|-------------|
-| `HERMES_API_KEY` | Bearer token for Hermes API authentication |
+| `HERMES_API_KEY` | Bearer token for Hermes API authentication. Lower precedence than `LLMBRIDGE_CREDENTIAL_ID` and the `start` message's `credential_id` |
 | `HERMES_MODEL` | Model name for requests. If unset, auto-discovered via `GET /v1/models` |
 | `HERMES_PREFLIGHT` | Set to `1` to run a health check on startup before accepting requests |
 | `HERMES_DASHBOARD_URL` | Hermes web dashboard URL (e.g. `http://127.0.0.1:9119`). Required for `-discover` |
@@ -36,12 +48,13 @@ llm-bridge-hermes -discover
 | `HERMES_INPUT_PRICE_PER_M` | USD per million input tokens (default: `3.0`) |
 | `HERMES_OUTPUT_PRICE_PER_M` | USD per million output tokens (default: `15.0`) |
 | `HERMES_REASONING_PRICE_PER_M` | USD per million reasoning tokens (default: `15.0`) |
+| `LLMBRIDGE_CREDENTIAL_ID` | aiauth profile name to resolve into the bearer token. Set by llm-bridge-server when launching this harness; can also be set manually for standalone runs. Overridden by the `start` message's `credential_id` field |
 
 ## JSON-RPC Methods
 
 | Method | Description |
 |--------|-------------|
-| `start` | Initialize session. Params: `session_id`, `prompt`, `system_prompt`, `model` |
+| `start` | Initialize session. Params: `session_id`, `prompt`, `system_prompt`, `model`, `credential_id` (optional, overrides `LLMBRIDGE_CREDENTIAL_ID`), `display_name`, `agent_id`, `resume` |
 | `message` | Send a user message. Params: `content`, `idempotency_key` (optional) |
 | `interrupt` | Cancel the in-flight turn (aborts SSE stream) |
 | `resume` | Resume a session (implicit via Hermes server-side state) |

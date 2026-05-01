@@ -24,6 +24,7 @@ type startParams struct {
 	SessionID    string `json:"session_id"`
 	DisplayName  string `json:"display_name,omitempty"`
 	AgentID      string `json:"agent_id,omitempty"`
+	CredentialID string `json:"credential_id,omitempty"`
 	Prompt       string `json:"prompt,omitempty"`
 	Resume       bool   `json:"resume,omitempty"`
 	SystemPrompt string `json:"system_prompt,omitempty"`
@@ -179,6 +180,24 @@ func (h *harness) handleStart(p startParams) error {
 	if p.Model != "" {
 		h.cfg.Model = p.Model
 		h.cfg.ModelExplicit = true
+	}
+
+	// Credential resolution. The start message credential_id takes precedence
+	// over LLMBRIDGE_CREDENTIAL_ID; an explicit HERMES_API_KEY only wins when
+	// no credential is configured.
+	if p.CredentialID != "" {
+		h.cfg.CredentialID = p.CredentialID
+	}
+	if h.cfg.CredentialID != "" {
+		key, err := resolveCredentialKey(h.cfg.CredentialID)
+		if err != nil {
+			emitEvent(makeEvent(h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+				e.Error = &msg.ErrorEvent{Code: "CREDENTIAL_ERROR", Message: err.Error()}
+			}))
+			return err
+		}
+		h.cfg.APIKey = key
+		h.client.apiKey = key
 	}
 
 	// Optional preflight — fail fast if the server isn't reachable.
@@ -522,11 +541,11 @@ func newIdempotencyKey() string {
 
 func makeEvent(sessionID string, eventType msg.EventType, raw json.RawMessage, fill func(*msg.Event)) msg.Event {
 	e := msg.Event{
-		Type:      eventType,
-		Harness:   msg.HarnessHermes,
-		SessionID: sessionID,
-		Timestamp: time.Now(),
-		Raw:       raw,
+		Type:             eventType,
+		Harness:          msg.HarnessHermes,
+		HarnessSessionID: sessionID,
+		Timestamp:        time.Now(),
+		Raw:              raw,
 	}
 	fill(&e)
 	return e
