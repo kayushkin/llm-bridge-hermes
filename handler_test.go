@@ -326,9 +326,12 @@ func TestNewIdempotencyKey(t *testing.T) {
 }
 
 func TestMakeEvent(t *testing.T) {
-	e := makeEvent("sess", msg.EventSystem, nil, func(e *msg.Event) {
+	e := makeEvent("bs", "sess", msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{Subtype: "test"}
 	})
+	if e.BridgeSessionID != "bs" {
+		t.Errorf("BridgeSessionID = %q, want bs", e.BridgeSessionID)
+	}
 	if e.HarnessSessionID != "sess" {
 		t.Errorf("HarnessSessionID = %q, want sess", e.HarnessSessionID)
 	}
@@ -354,7 +357,7 @@ func TestEmitEventConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			emitEvent(makeEvent("sess", msg.EventSystem, nil, func(e *msg.Event) {
+			emitEvent(makeEvent("bs", "sess", msg.EventSystem, nil, func(e *msg.Event) {
 				e.System = &msg.SystemEvent{Subtype: "concurrent"}
 			}))
 		}()

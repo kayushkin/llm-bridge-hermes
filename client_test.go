@@ -72,7 +72,7 @@ func TestParseSSEStream_TextDelta(t *testing.T) {
 	c := testClient("")
 	getEvents := captureEvents(t)
 
-	result, err := c.parseSSEStream(strings.NewReader(stream), "sess-1")
+	result, err := c.parseSSEStream(strings.NewReader(stream), "sess-1", "sess-1")
 	if err != nil {
 		t.Fatalf("parseSSEStream: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestParseSSEStream_ToolCall(t *testing.T) {
 	c := testClient("")
 	getEvents := captureEvents(t)
 
-	result, err := c.parseSSEStream(strings.NewReader(stream), "sess-2")
+	result, err := c.parseSSEStream(strings.NewReader(stream), "sess-2", "sess-2")
 	if err != nil {
 		t.Fatalf("parseSSEStream: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestParseSSEStream_ToolCall_ArrayOutput(t *testing.T) {
 	c := testClient("")
 	getEvents := captureEvents(t)
 
-	if _, err := c.parseSSEStream(strings.NewReader(stream), "sess-arr"); err != nil {
+	if _, err := c.parseSSEStream(strings.NewReader(stream), "sess-arr", "sess-arr"); err != nil {
 		t.Fatalf("parseSSEStream: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestParseSSEStream_Reasoning(t *testing.T) {
 	c := testClient("")
 	getEvents := captureEvents(t)
 
-	result, err := c.parseSSEStream(strings.NewReader(stream), "sess-3")
+	result, err := c.parseSSEStream(strings.NewReader(stream), "sess-3", "sess-3")
 	if err != nil {
 		t.Fatalf("parseSSEStream: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestParseSSEStream_Refusal(t *testing.T) {
 	c := testClient("")
 	getEvents := captureEvents(t)
 
-	_, err := c.parseSSEStream(strings.NewReader(stream), "sess-4")
+	_, err := c.parseSSEStream(strings.NewReader(stream), "sess-4", "sess-4")
 	if err != nil {
 		t.Fatalf("parseSSEStream: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestParseSSEStream_Failed(t *testing.T) {
 	c := testClient("")
 	getEvents := captureEvents(t)
 
-	_, err := c.parseSSEStream(strings.NewReader(stream), "sess-5")
+	_, err := c.parseSSEStream(strings.NewReader(stream), "sess-5", "sess-5")
 	if err != nil {
 		t.Fatalf("parseSSEStream: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestParseSSEStream_RateLimits(t *testing.T) {
 	c := testClient("")
 	getEvents := captureEvents(t)
 
-	_, err := c.parseSSEStream(strings.NewReader(stream), "sess-6")
+	_, err := c.parseSSEStream(strings.NewReader(stream), "sess-6", "sess-6")
 	if err != nil {
 		t.Fatalf("parseSSEStream: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestParseSSEStream_UnknownEvent(t *testing.T) {
 	c := testClient("")
 	getEvents := captureEvents(t)
 
-	_, err := c.parseSSEStream(strings.NewReader(stream), "sess-7")
+	_, err := c.parseSSEStream(strings.NewReader(stream), "sess-7", "sess-7")
 	if err != nil {
 		t.Fatalf("parseSSEStream: %v", err)
 	}
