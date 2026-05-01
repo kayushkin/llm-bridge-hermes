@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -369,6 +370,89 @@ func TestHandleStart_ColdStart(t *testing.T) {
 	_ = getEvents()
 }
 
+// TestHandleStart_ColdStart_WireProtocol exercises the full cold-start chain
+// against an httptest fake of Hermes: handleStart{BridgeSessionID:"bs_1"} with
+// no HarnessSessionID, then a turn. Asserts that every emitted event stamps
+// both BridgeSessionID and HarnessSessionID equal to "bs_1" (no harness-side
+// rotation in Hermes), and that the resulting POST /v1/responses carries
+// `conversation: bs_1` with no previous_response_id (first turn after cold
+// start). Companion to TestHandleStart_Resume.
+func TestHandleStart_ColdStart_WireProtocol(t *testing.T) {
+	var capturedConversation string
+	var capturedPrevRespID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("path = %q, want /v1/responses", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req responsesRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal request: %v", err)
+		}
+		capturedConversation = req.Conversation
+		capturedPrevRespID = req.PreviousResponseID
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"r-cold\",\"status\":\"in_progress\"}}\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r-cold\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n"))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		BaseURL:         server.URL,
+		APIKey:          "test-key",
+		Model:           "test-model",
+		ModelExplicit:   true,
+		InputPricePerM:  3.0,
+		OutputPricePerM: 15.0,
+	}
+	h := newHarness(cfg)
+	getEvents := captureEvents(t)
+
+	if err := h.handleStart(startParams{
+		BridgeSessionID: "bs_1",
+		Resume:          false,
+	}); err != nil {
+		t.Fatalf("handleStart (cold): %v", err)
+	}
+
+	if h.bridgeSessionID != "bs_1" {
+		t.Errorf("bridgeSessionID = %q, want bs_1", h.bridgeSessionID)
+	}
+	if h.sessionID != "bs_1" {
+		t.Errorf("sessionID = %q, want bs_1 (no HarnessSessionID set, falls through to bridgeID)", h.sessionID)
+	}
+	if h.conversation != "bs_1" {
+		t.Errorf("conversation = %q, want bs_1 (cold start uses bridgeID)", h.conversation)
+	}
+
+	if err := h.sendMessageDirect("hello", "idem-cold-1"); err != nil {
+		t.Fatalf("sendMessageDirect: %v", err)
+	}
+	if capturedConversation != "bs_1" {
+		t.Errorf("captured conversation = %q, want bs_1", capturedConversation)
+	}
+	if capturedPrevRespID != "" {
+		t.Errorf("captured previous_response_id = %q, want empty (first turn after cold start)", capturedPrevRespID)
+	}
+
+	// Every emitted event must stamp both ids equal to bs_1.
+	events := getEvents()
+	if len(events) == 0 {
+		t.Fatal("no events captured")
+	}
+	for i, ev := range events {
+		if ev.BridgeSessionID != "bs_1" {
+			t.Errorf("event[%d] BridgeSessionID = %q, want bs_1 (type=%s)", i, ev.BridgeSessionID, ev.Type)
+		}
+		if ev.HarnessSessionID != "bs_1" {
+			t.Errorf("event[%d] HarnessSessionID = %q, want bs_1 (type=%s)", i, ev.HarnessSessionID, ev.Type)
+		}
+	}
+}
+
 // TestHandleStart_ForkRejected verifies the fork-from-bridge-server path
 // returns FORK_UNSUPPORTED. Hermes fork is per-response (`previous_response_id`),
 // not per-session — silently producing a fresh chain would violate the contract,
@@ -440,6 +524,59 @@ func TestHandleStart_SetsState(t *testing.T) {
 	}
 	if events[1].Type != msg.EventSessionState || events[1].State == nil || events[1].State.State != msg.SessionIdle {
 		t.Errorf("second event should be idle state, got %+v", events[1])
+	}
+}
+
+// TestHermes_NoStateDBLeak guards the "Hermes harness needs no state.db"
+// invariant from the session-chain port. Cold-starting and shutting down
+// without ever issuing a turn must leave no SQLite artifacts under any
+// llm-bridge-hermes data directory — Hermes holds conversation state
+// server-side, so the harness has nothing to persist.
+//
+// The test isolates HOME and XDG_DATA_HOME to a tempdir, runs handleStart
+// (no prompt, so no /v1/responses call), shuts the harness down, then walks
+// the tempdir asserting nothing matching state.db / *.sqlite was created.
+// A future commit that introduces SQLite-backed state will trip this guard.
+func TestHermes_NoStateDBLeak(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("XDG_DATA_HOME", filepath.Join(tempHome, ".local", "share"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tempHome, ".config"))
+
+	h := testHarness()
+	getEvents := captureEvents(t)
+
+	if err := h.handleStart(startParams{
+		BridgeSessionID: "bs_crash",
+	}); err != nil {
+		t.Fatalf("handleStart: %v", err)
+	}
+	// Crash before any turn: tear down without sending a message.
+	h.shutdown()
+	_ = getEvents()
+
+	// Walk the isolated tempdir; fail on any file that looks like SQLite state.
+	err := filepath.Walk(tempHome, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		base := filepath.Base(path)
+		lower := strings.ToLower(base)
+		if strings.HasSuffix(lower, ".db") ||
+			strings.HasSuffix(lower, ".sqlite") ||
+			strings.HasSuffix(lower, ".sqlite3") ||
+			lower == "state.db" ||
+			strings.HasSuffix(lower, "-wal") ||
+			strings.HasSuffix(lower, "-shm") {
+			t.Errorf("hermes harness leaked SQLite artifact at %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk tempdir: %v", err)
 	}
 }
 
