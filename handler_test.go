@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -268,6 +271,102 @@ func TestHandleForgetResponse_EmptyID(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for empty id")
 	}
+}
+
+// TestHandleStart_Resume verifies the canonical resume path: start{Resume:true}
+// with an explicit HarnessSessionID restores the prior Hermes conversation name
+// (rather than minting a fresh chain from BridgeSessionID), and the next
+// /v1/responses request carries that conversation through.
+func TestHandleStart_Resume(t *testing.T) {
+	var capturedConversation string
+	var capturedPrevRespID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("path = %q, want /v1/responses", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req responsesRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal request: %v", err)
+		}
+		capturedConversation = req.Conversation
+		capturedPrevRespID = req.PreviousResponseID
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"r-resume\",\"status\":\"in_progress\"}}\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r-resume\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n"))
+	}))
+	defer server.Close()
+
+	cfg := Config{
+		BaseURL:         server.URL,
+		APIKey:          "test-key",
+		Model:           "test-model",
+		ModelExplicit:   true,
+		InputPricePerM:  3.0,
+		OutputPricePerM: 15.0,
+	}
+	h := newHarness(cfg)
+	getEvents := captureEvents(t)
+
+	if err := h.handleStart(startParams{
+		BridgeSessionID:  "bs_xyz",
+		HarnessSessionID: "cv_abc",
+		Resume:           true,
+	}); err != nil {
+		t.Fatalf("handleStart (resume): %v", err)
+	}
+
+	if h.bridgeSessionID != "bs_xyz" {
+		t.Errorf("bridgeSessionID = %q, want bs_xyz", h.bridgeSessionID)
+	}
+	if h.sessionID != "cv_abc" {
+		t.Errorf("sessionID = %q, want cv_abc", h.sessionID)
+	}
+	if h.conversation != "cv_abc" {
+		t.Errorf("conversation = %q, want cv_abc (resume should restore HarnessSessionID)", h.conversation)
+	}
+
+	if err := h.sendMessageDirect("hello", "idem-resume-1"); err != nil {
+		t.Fatalf("sendMessageDirect: %v", err)
+	}
+	if capturedConversation != "cv_abc" {
+		t.Errorf("captured conversation = %q, want cv_abc", capturedConversation)
+	}
+	if capturedPrevRespID != "" {
+		t.Errorf("captured previous_response_id = %q, want empty (first turn after resume)", capturedPrevRespID)
+	}
+	_ = getEvents()
+}
+
+// TestHandleStart_ColdStart verifies that cold start (Resume:false) ignores any
+// HarnessSessionID present in start params and uses BridgeSessionID as the
+// Hermes conversation name — preserving prior behavior.
+func TestHandleStart_ColdStart(t *testing.T) {
+	h := testHarness()
+	getEvents := captureEvents(t)
+
+	if err := h.handleStart(startParams{
+		BridgeSessionID:  "bs_xyz",
+		HarnessSessionID: "cv_abc",
+		Resume:           false,
+		Model:            "test-model",
+	}); err != nil {
+		t.Fatalf("handleStart (cold): %v", err)
+	}
+
+	if h.bridgeSessionID != "bs_xyz" {
+		t.Errorf("bridgeSessionID = %q, want bs_xyz", h.bridgeSessionID)
+	}
+	if h.sessionID != "cv_abc" {
+		t.Errorf("sessionID = %q, want cv_abc", h.sessionID)
+	}
+	if h.conversation != "bs_xyz" {
+		t.Errorf("conversation = %q, want bs_xyz (cold start uses bridgeID)", h.conversation)
+	}
+	_ = getEvents()
 }
 
 func TestHandleStart_SetsState(t *testing.T) {

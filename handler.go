@@ -193,7 +193,15 @@ func (h *harness) handleStart(p startParams) error {
 	}
 	h.bridgeSessionID = bridgeID
 	h.sessionID = harnessID
-	h.conversation = bridgeID // Hermes conversation name = bridge session id
+	if p.Resume {
+		// Canonical resume: bridge-server sends start{Resume:true} with the
+		// previous HarnessSessionID populated (Hermes's prior conversation name).
+		// Fall back to bridgeID if absent (harnessID resolves to bridgeID via
+		// the chain above), matching cold-start behavior.
+		h.conversation = harnessID
+	} else {
+		h.conversation = bridgeID // cold start: Hermes conversation name = bridge session id
+	}
 	h.systemPrompt = p.SystemPrompt
 	if p.Model != "" {
 		h.cfg.Model = p.Model
@@ -292,9 +300,12 @@ func (h *harness) handleCompact(p compactParams) error {
 	return fmt.Errorf("compact unsupported on hermes HTTP API")
 }
 
+// handleResume is a no-op system event. The canonical resume path used by
+// llm-bridge-server is start{Resume:true, HarnessSessionID:...}, which is
+// handled in handleStart — not the explicit "resume" JSON-RPC method.
+// Hermes maintains server-side conversation state via the conversation name,
+// so simply continuing turns against the restored conversation is enough.
 func (h *harness) handleResume() error {
-	// Hermes maintains server-side conversation state via the conversation name.
-	// Resuming is implicit — the next message will continue the conversation.
 	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{Subtype: "resume", Message: "session resumed"}
 	}))
