@@ -52,6 +52,16 @@ func main() {
 		json.NewEncoder(os.Stdout).Encode(sessions)
 		os.Exit(0)
 	}
+
+	// -import-history is part of the conformance contract but not yet
+	// implemented for hermes. Exit 2 to signal "unsupported" rather than
+	// silently falling through to the JSON-RPC loop, which would otherwise
+	// show up as a false-positive PASS on the conformance dashboard.
+	if len(os.Args) > 1 && os.Args[1] == "-import-history" {
+		fmt.Fprintln(os.Stderr, "llm-bridge-hermes: -import-history not yet implemented")
+		os.Exit(2)
+	}
+
 	h := newHarness(cfg)
 
 	sigs := make(chan os.Signal, 1)
