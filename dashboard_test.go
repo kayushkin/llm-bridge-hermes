@@ -82,8 +82,11 @@ func TestToStoredSessions(t *testing.T) {
 		t.Fatalf("got %d, want 1", len(got))
 	}
 	s := got[0]
-	if s.ID != "s1" {
-		t.Errorf("ID = %q, want s1", s.ID)
+	if s.HarnessSessionID != "s1" {
+		t.Errorf("HarnessSessionID = %q, want s1", s.HarnessSessionID)
+	}
+	if s.BridgeSessionID != "" {
+		t.Errorf("BridgeSessionID = %q, want empty (hermes has no chain head)", s.BridgeSessionID)
 	}
 	if s.Harness != msg.HarnessHermes {
 		t.Errorf("Harness = %q, want hermes", s.Harness)
@@ -124,7 +127,7 @@ func TestDiscoverSessions_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverSessions: %v", err)
 	}
-	if len(sessions) != 1 || sessions[0].ID != "discovered-1" {
-		t.Errorf("sessions = %+v, want 1 session with ID discovered-1", sessions)
+	if len(sessions) != 1 || sessions[0].HarnessSessionID != "discovered-1" {
+		t.Errorf("sessions = %+v, want 1 session with HarnessSessionID discovered-1", sessions)
 	}
 }

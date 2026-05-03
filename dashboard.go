@@ -77,17 +77,20 @@ func (d *dashboardClient) listSessions(ctx context.Context) ([]hermesSession, er
 	return sessions, nil
 }
 
-// toStoredSessions converts dashboard sessions to the canonical StoredSession type.
+// toStoredSessions converts dashboard sessions to the canonical StoredSession
+// type. Hermes owns its own session storage, so the dashboard id IS the
+// harness session id; there is no chain-head bridge_session_id to surface
+// (BridgeSessionID stays empty).
 func toStoredSessions(sessions []hermesSession) []msg.StoredSession {
 	out := make([]msg.StoredSession, 0, len(sessions))
 	for _, s := range sessions {
 		out = append(out, msg.StoredSession{
-			ID:        s.ID,
-			Harness:   msg.HarnessHermes,
-			Prompt:    s.Title,
-			CreatedAt: s.CreatedAt,
-			UpdatedAt: s.UpdatedAt,
-			TurnCount: s.Messages,
+			HarnessSessionID: s.ID,
+			Harness:          msg.HarnessHermes,
+			Prompt:           s.Title,
+			CreatedAt:        s.CreatedAt,
+			UpdatedAt:        s.UpdatedAt,
+			TurnCount:        s.Messages,
 		})
 	}
 	return out
