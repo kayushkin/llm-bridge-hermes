@@ -44,6 +44,15 @@ func main() {
 	cfg := loadConfig()
 
 	if len(os.Args) > 1 && os.Args[1] == "-discover" {
+		// Persistent sessions live in the Hermes web dashboard, not on this
+		// host. When HERMES_DASHBOARD_URL is unset the harness has no source
+		// to enumerate, so the contract-correct response is an empty array
+		// (matches forgecode/aider/nanoclaw shape for stateless-from-the-
+		// harness's-view-of-disk).
+		if cfg.DashboardURL == "" {
+			fmt.Println("[]")
+			os.Exit(0)
+		}
 		sessions, err := discoverSessions(cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "discover: %v\n", err)
