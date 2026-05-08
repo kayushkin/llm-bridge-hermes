@@ -279,14 +279,7 @@ func (h *harness) handleStart(p startParams) error {
 		}))
 	}
 
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
-		e.State = &msg.StateEvent{State: msg.SessionRunning, Previous: msg.SessionIdle}
-	}))
-
 	if p.Prompt == "" {
-		emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
-			e.State = &msg.StateEvent{State: msg.SessionIdle, Previous: msg.SessionRunning, Reason: "ready"}
-		}))
 		return nil
 	}
 
@@ -397,9 +390,6 @@ func (h *harness) handleRetry() error {
 	// should branch from its parent. Without server-side parent lookup, the
 	// safest approach is to keep lastRespID as-is (chain forward) and let the
 	// caller use fork() if they want true replacement.
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
-		e.State = &msg.StateEvent{State: msg.SessionRunning, Previous: msg.SessionIdle}
-	}))
 	return h.sendMessage(h.lastInput, "")
 }
 
@@ -457,12 +447,9 @@ func (h *harness) handleForgetResponse(p responseIDParams) error {
 	return nil
 }
 
-// sendMessage emits running state and issues a turn. Called directly from
-// handleStart (before queue is running) and via the turn worker for queued messages.
+// sendMessage issues a turn. Called directly from handleStart (before queue
+// is running) and via the turn worker for queued messages.
 func (h *harness) sendMessage(content, idempotencyKey string) error {
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
-		e.State = &msg.StateEvent{State: msg.SessionRunning, Previous: msg.SessionIdle}
-	}))
 	return h.sendMessageDirect(content, idempotencyKey)
 }
 
@@ -517,9 +504,6 @@ func (h *harness) sendMessageDirect(content, idempotencyKey string) error {
 			emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
 				e.Error = &msg.ErrorEvent{Code: "INTERRUPTED", Message: "turn cancelled", Retryable: false}
 			}))
-			emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
-				e.State = &msg.StateEvent{State: msg.SessionAborted, Previous: msg.SessionRunning, Reason: "interrupted"}
-			}))
 			return err
 		}
 
@@ -540,9 +524,6 @@ func (h *harness) sendMessageDirect(content, idempotencyKey string) error {
 				Retryable:  retryable,
 			}
 		}))
-		emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
-			e.State = &msg.StateEvent{State: msg.SessionError, Previous: msg.SessionRunning, Reason: err.Error()}
-		}))
 		return err
 	}
 
@@ -560,10 +541,6 @@ func (h *harness) sendMessageDirect(content, idempotencyKey string) error {
 			Usage:      resp.Usage,
 		}
 		e.Result.Cost = resp.Cost
-	}))
-
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSessionState, nil, func(e *msg.Event) {
-		e.State = &msg.StateEvent{State: msg.SessionIdle, Previous: msg.SessionRunning}
 	}))
 
 	log.Printf("turn complete: resp_id=%s duration=%dms idem=%s", resp.ID, durationMS, idempotencyKey)

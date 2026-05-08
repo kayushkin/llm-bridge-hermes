@@ -490,11 +490,12 @@ func TestHandleStart_ForkRejected(t *testing.T) {
 	}
 }
 
-func TestHandleStart_SetsState(t *testing.T) {
+func TestHandleStart_StoresParams(t *testing.T) {
 	h := testHarness()
 	getEvents := captureEvents(t)
 
-	// Start with no prompt — should go running then immediately idle.
+	// Start with no prompt — params are stored, no message is sent.
+	// SessionState transitions are derived centrally by llm-bridge-server.
 	err := h.handleStart(startParams{
 		SessionID:    "sess-1",
 		SystemPrompt: "You are helpful",
@@ -514,16 +515,10 @@ func TestHandleStart_SetsState(t *testing.T) {
 		t.Errorf("model = %q, want custom-model", h.cfg.Model)
 	}
 
-	events := getEvents()
-	// Should emit: running state, then idle state (no prompt = no message sent)
-	if len(events) < 2 {
-		t.Fatalf("expected at least 2 events, got %d", len(events))
-	}
-	if events[0].Type != msg.EventSessionState || events[0].State == nil || events[0].State.State != msg.SessionRunning {
-		t.Errorf("first event should be running state, got %+v", events[0])
-	}
-	if events[1].Type != msg.EventSessionState || events[1].State == nil || events[1].State.State != msg.SessionIdle {
-		t.Errorf("second event should be idle state, got %+v", events[1])
+	for _, e := range getEvents() {
+		if e.Type == msg.EventError {
+			t.Errorf("unexpected error event: %+v", e.Error)
+		}
 	}
 }
 

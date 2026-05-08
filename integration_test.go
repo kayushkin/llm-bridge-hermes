@@ -313,20 +313,10 @@ func TestIntegration_HandlerStartMessageResult(t *testing.T) {
 	}
 
 	events := getEvents()
-	var sawRunning, sawIdle, sawResult, sawStreamDelta bool
+	var sawResult, sawStreamDelta bool
 	var resultText string
 	for _, e := range events {
 		switch e.Type {
-		case msg.EventSessionState:
-			if e.State == nil {
-				continue
-			}
-			if e.State.State == msg.SessionRunning {
-				sawRunning = true
-			}
-			if e.State.State == msg.SessionIdle {
-				sawIdle = true
-			}
 		case msg.EventStream:
 			if e.Stream != nil && e.Stream.Delta != nil && e.Stream.Delta.Type == msg.DeltaText {
 				sawStreamDelta = true
@@ -347,12 +337,6 @@ func TestIntegration_HandlerStartMessageResult(t *testing.T) {
 				t.Fatalf("unexpected error event: code=%s msg=%s", e.Error.Code, e.Error.Message)
 			}
 		}
-	}
-	if !sawRunning {
-		t.Error("missing session_state=running event")
-	}
-	if !sawIdle {
-		t.Error("missing session_state=idle event")
 	}
 	if !sawResult {
 		t.Error("missing result event")
@@ -500,20 +484,14 @@ func TestIntegration_HandlerInterrupt(t *testing.T) {
 	}
 
 	events := getEvents()
-	var sawInterrupted, sawAborted bool
+	var sawInterrupted bool
 	for _, e := range events {
 		if e.Type == msg.EventError && e.Error != nil && e.Error.Code == "INTERRUPTED" {
 			sawInterrupted = true
 		}
-		if e.Type == msg.EventSessionState && e.State != nil && e.State.State == msg.SessionAborted {
-			sawAborted = true
-		}
 	}
 	if !sawInterrupted {
 		t.Error("missing INTERRUPTED error event")
-	}
-	if !sawAborted {
-		t.Error("missing session_state=aborted event")
 	}
 }
 
