@@ -8,7 +8,8 @@
 //     (e.g. anthropic/claude-haiku-4-5 + ANTHROPIC_TOKEN)
 //
 // Run with:
-//   go test -tags=integration -v -run Integration -timeout 5m ./...
+//
+//	go test -tags=integration -v -run Integration -timeout 5m ./...
 //
 // Tests fail fast (not skip) if the server is unreachable: integration runs
 // are a deliberate choice, so silent skips would mask "Hermes isn't up."
@@ -138,8 +139,8 @@ func TestIntegration_SendResponsesStreaming(t *testing.T) {
 		Conversation:    sessionID,
 		MaxOutputTokens: intPtr(32),
 	}, sendOptions{
-		SessionID:      sessionID,
-		IdempotencyKey: newIdempotencyKey(),
+		BridgeSessionID: sessionID,
+		IdempotencyKey:  newIdempotencyKey(),
 	})
 	if err != nil {
 		t.Fatalf("sendResponses: %v", err)
@@ -188,8 +189,8 @@ func TestIntegration_SendResponsesChaining(t *testing.T) {
 		Conversation:    sessionID,
 		MaxOutputTokens: intPtr(64),
 	}, sendOptions{
-		SessionID:      sessionID,
-		IdempotencyKey: newIdempotencyKey(),
+		BridgeSessionID: sessionID,
+		IdempotencyKey:  newIdempotencyKey(),
 	})
 	if err != nil {
 		t.Fatalf("turn 1: %v", err)
@@ -207,8 +208,8 @@ func TestIntegration_SendResponsesChaining(t *testing.T) {
 		PreviousResponseID: r1.ID,
 		MaxOutputTokens:    intPtr(64),
 	}, sendOptions{
-		SessionID:      sessionID,
-		IdempotencyKey: newIdempotencyKey(),
+		BridgeSessionID: sessionID,
+		IdempotencyKey:  newIdempotencyKey(),
 	})
 	if err != nil {
 		t.Fatalf("turn 2: %v", err)
@@ -231,8 +232,8 @@ func TestIntegration_GetAndDeleteResponse(t *testing.T) {
 		Conversation:    sessionID,
 		MaxOutputTokens: intPtr(32),
 	}, sendOptions{
-		SessionID:      sessionID,
-		IdempotencyKey: newIdempotencyKey(),
+		BridgeSessionID: sessionID,
+		IdempotencyKey:  newIdempotencyKey(),
 	})
 	if err != nil {
 		t.Fatalf("sendResponses: %v", err)
@@ -276,8 +277,8 @@ func TestIntegration_IdempotencyKeyAccepted(t *testing.T) {
 	}
 
 	r, err := c.sendResponses(t.Context(), req, sendOptions{
-		SessionID:      sessionID,
-		IdempotencyKey: newIdempotencyKey(),
+		BridgeSessionID: sessionID,
+		IdempotencyKey:  newIdempotencyKey(),
 	})
 	if err != nil {
 		t.Fatalf("sendResponses with Idempotency-Key: %v", err)

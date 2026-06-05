@@ -49,8 +49,8 @@ func (c *hermesClient) computeCost(usage msg.TokenUsage) *msg.Cost {
 	total := inputCost + outputCost + reasoningCost
 
 	return &msg.Cost{
-		TotalUSD: total,
-		InputUSD: inputCost,
+		TotalUSD:  total,
+		InputUSD:  inputCost,
 		OutputUSD: outputCost + reasoningCost, // Reasoning tokens count as output
 	}
 }
@@ -74,9 +74,9 @@ type responsesRequest struct {
 }
 
 type toolDefinition struct {
-	Type        string         `json:"type"` // "function"
-	Function    functionSchema `json:"function"`
-	CacheControl *cacheControl `json:"cache_control,omitempty"`
+	Type         string         `json:"type"` // "function"
+	Function     functionSchema `json:"function"`
+	CacheControl *cacheControl  `json:"cache_control,omitempty"`
 }
 
 type functionSchema struct {
@@ -94,8 +94,8 @@ type toolChoice struct {
 }
 
 type reasoningConfig struct {
-	Enabled bool  `json:"enabled"`
-	Budget  *int  `json:"budget,omitempty"` // Token budget for reasoning
+	Enabled bool   `json:"enabled"`
+	Budget  *int   `json:"budget,omitempty"` // Token budget for reasoning
 	Effort  string `json:"effort,omitempty"` // "low", "medium", "high"
 }
 
@@ -113,13 +113,18 @@ type responsesResult struct {
 
 // sendOptions are per-call knobs layered onto an HTTP request to Hermes.
 type sendOptions struct {
-	// BridgeSessionID is bridge-server's stable session id; stamped onto
-	// every event emitted from this call's SSE stream so consumers can route
-	// by it.
+	// BridgeSessionID is bridge-server's stable session id. It is stamped onto
+	// every event emitted from this call's SSE stream so consumers can route by
+	// it, and is sent as the X-Hermes-Session-Id header for native session
+	// continuity (Hermes treats it as opaque). The bridge id is the stable
+	// identity that is always present, so it is the correlation key.
 	BridgeSessionID string
-	// SessionID is the harness-side session id, sent as X-Hermes-Session-Id
-	// for native session continuity. Hermes treats it as opaque.
-	SessionID string
+	// HarnessSessionID is the harness-native session id, stamped onto every
+	// emitted event. Hermes does not surface its own id, so this is empty unless
+	// a caller explicitly supplied one (resume). It is never used for the
+	// X-Hermes-Session-Id header and must never equal BridgeSessionID — the
+	// server contract rejects HarnessSessionID == BridgeSessionID.
+	HarnessSessionID string
 	// IdempotencyKey dedupes retries server-side (5-minute cache). Required —
 	// callers must mint one (typically UUID4) so retries don't double-bill.
 	IdempotencyKey string
@@ -131,8 +136,8 @@ func (c *hermesClient) sendResponses(ctx context.Context, req responsesRequest, 
 	if opts.IdempotencyKey == "" {
 		return nil, fmt.Errorf("sendResponses: IdempotencyKey required")
 	}
-	if opts.SessionID == "" {
-		return nil, fmt.Errorf("sendResponses: SessionID required")
+	if opts.BridgeSessionID == "" {
+		return nil, fmt.Errorf("sendResponses: BridgeSessionID required")
 	}
 
 	body, err := json.Marshal(req)
@@ -146,7 +151,7 @@ func (c *hermesClient) sendResponses(ctx context.Context, req responsesRequest, 
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Idempotency-Key", opts.IdempotencyKey)
-	httpReq.Header.Set("X-Hermes-Session-Id", opts.SessionID)
+	httpReq.Header.Set("X-Hermes-Session-Id", opts.BridgeSessionID)
 	if c.apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
@@ -165,7 +170,7 @@ func (c *hermesClient) sendResponses(ctx context.Context, req responsesRequest, 
 		}
 	}
 
-	return c.parseSSEStream(resp.Body, opts.BridgeSessionID, opts.SessionID)
+	return c.parseSSEStream(resp.Body, opts.BridgeSessionID, opts.HarnessSessionID)
 }
 
 // doJSON performs an HTTP request and decodes the JSON response body.
@@ -250,7 +255,7 @@ func (c *hermesClient) deleteResponse(ctx context.Context, id string) error {
 
 // parseSSEStream reads SSE events from the Hermes streaming response and
 // emits canonical events. Returns the accumulated result.
-func (c *hermesClient) parseSSEStream(r io.Reader, bridgeSessionID, sessionID string) (*responsesResult, error) {
+func (c *hermesClient) parseSSEStream(r io.Reader, bridgeSessionID, harnessSessionID string) (*responsesResult, error) {
 	result := &responsesResult{}
 	var textBuilder strings.Builder
 
@@ -276,7 +281,7 @@ func (c *hermesClient) parseSSEStream(r io.Reader, bridgeSessionID, sessionID st
 		}
 
 		raw := json.RawMessage(data)
-		c.translateEvent(event, bridgeSessionID, sessionID, result, &textBuilder, raw)
+		c.translateEvent(event, bridgeSessionID, harnessSessionID, result, &textBuilder, raw)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -333,11 +338,11 @@ type responseObject struct {
 }
 
 type outputItem struct {
-	Type      string         `json:"type"`
-	ID        string         `json:"id,omitempty"`
-	Name      string         `json:"name,omitempty"`
-	CallID    string         `json:"call_id,omitempty"`
-	Arguments string         `json:"arguments,omitempty"`
+	Type      string `json:"type"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 	// Output is the function_call_output payload. Hermes emits it as either
 	// a plain string OR an array of content parts (e.g. `[{"type":"input_text","text":"..."}]`).
 	// RawMessage lets us accept either shape without losing data; extractOutputText
@@ -403,7 +408,7 @@ type errorDetail struct {
 	Message string `json:"message"`
 }
 
-func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID string, result *responsesResult, text *strings.Builder, raw json.RawMessage) {
+func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, harnessSessionID string, result *responsesResult, text *strings.Builder, raw json.RawMessage) {
 	switch event.Type {
 	case "response.created":
 		if event.Response != nil {
@@ -412,7 +417,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 
 	case "response.output_text.delta":
 		text.WriteString(event.Delta)
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventStream, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventStream, raw, func(e *msg.Event) {
 			e.Stream = &msg.HarnessStream{
 				Delta: &msg.BlockDelta{
 					Index: event.ContentIndex,
@@ -425,7 +430,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 	case "response.output_text.done":
 		// Finished text content block — emit as EventBlock per the
 		// canonical contract (EventStream is reserved for the deltas above).
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventBlock, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventBlock, raw, func(e *msg.Event) {
 			e.Block = &msg.BlockEvent{
 				Index: event.ContentIndex,
 				Block: &msg.ContentBlock{
@@ -437,7 +442,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 
 	case "response.reasoning.delta":
 		// Streaming thinking/reasoning content
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventStream, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventStream, raw, func(e *msg.Event) {
 			e.Stream = &msg.HarnessStream{
 				Delta: &msg.BlockDelta{
 					Index:    event.ContentIndex,
@@ -450,7 +455,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 	case "response.reasoning.done":
 		// Finished thinking content block — emit as EventBlock per the
 		// canonical contract (EventStream is reserved for the deltas above).
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventBlock, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventBlock, raw, func(e *msg.Event) {
 			e.Block = &msg.BlockEvent{
 				Index: event.ContentIndex,
 				Block: &msg.ContentBlock{
@@ -462,7 +467,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 
 	case "response.refusal.delta":
 		// Streaming refusal content — emit as error stream
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventStream, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventStream, raw, func(e *msg.Event) {
 			e.Stream = &msg.HarnessStream{
 				Delta: &msg.BlockDelta{
 					Index: event.ContentIndex,
@@ -474,7 +479,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 
 	case "response.refusal.done":
 		// Model refused the request
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventError, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventError, raw, func(e *msg.Event) {
 			e.Error = &msg.ErrorEvent{
 				Code:    "MODEL_REFUSAL",
 				Message: event.Refusal,
@@ -483,7 +488,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 
 	case "response.content_part.added":
 		// Content block started — lifecycle tracking
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventSystem, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventSystem, raw, func(e *msg.Event) {
 			partType := "unknown"
 			if event.Part != nil {
 				partType = event.Part.Type
@@ -496,7 +501,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 
 	case "response.content_part.done":
 		// Content block finished
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventSystem, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventSystem, raw, func(e *msg.Event) {
 			e.System = &msg.SystemEvent{
 				Subtype: "content_part_done",
 				Message: fmt.Sprintf("content part completed: index=%d", event.ContentIndex),
@@ -507,7 +512,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 		if event.Item != nil {
 			switch event.Item.Type {
 			case "function_call":
-				emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventToolCall, raw, func(e *msg.Event) {
+				emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventToolCall, raw, func(e *msg.Event) {
 					e.ToolCall = &msg.ToolCallEvent{
 						ToolID: event.Item.CallID,
 						Name:   event.Item.Name,
@@ -515,7 +520,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 				}))
 			case "message":
 				// Assistant message item started
-				emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventSystem, raw, func(e *msg.Event) {
+				emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventSystem, raw, func(e *msg.Event) {
 					e.System = &msg.SystemEvent{
 						Subtype: "message_item_added",
 						Message: fmt.Sprintf("message item started: role=%s", event.Item.Role),
@@ -526,7 +531,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 
 	case "response.function_call_arguments.delta":
 		// Tool input streaming — now mapped to DeltaInputJSON
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventStream, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventStream, raw, func(e *msg.Event) {
 			e.Stream = &msg.HarnessStream{
 				Delta: &msg.BlockDelta{
 					Index:       event.ContentIndex,
@@ -537,7 +542,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 		}))
 
 	case "response.function_call_arguments.done":
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventToolCall, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventToolCall, raw, func(e *msg.Event) {
 			e.ToolCall = &msg.ToolCallEvent{
 				ToolID: event.CallID,
 				Name:   event.Name,
@@ -551,7 +556,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 		}
 		switch event.Item.Type {
 		case "function_call_output":
-			emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventToolResult, raw, func(e *msg.Event) {
+			emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventToolResult, raw, func(e *msg.Event) {
 				e.ToolResult = &msg.ToolResultEvent{
 					ToolID: event.Item.CallID,
 					Output: extractOutputText(event.Item.Output),
@@ -559,7 +564,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 			}))
 		case "message":
 			// Message item completed
-			emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventSystem, raw, func(e *msg.Event) {
+			emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventSystem, raw, func(e *msg.Event) {
 				e.System = &msg.SystemEvent{
 					Subtype: "message_item_done",
 					Message: "message item completed",
@@ -595,7 +600,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 		if event.Response != nil && event.Response.Status != "" {
 			errMsg = fmt.Sprintf("%s (status: %s)", errMsg, event.Response.Status)
 		}
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventError, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventError, raw, func(e *msg.Event) {
 			e.Error = &msg.ErrorEvent{
 				Code:      errCode,
 				Message:   errMsg,
@@ -606,7 +611,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 	case "rate_limits.updated":
 		// Rate limit information
 		if event.RateLimits != nil {
-			emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventSystem, raw, func(e *msg.Event) {
+			emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventSystem, raw, func(e *msg.Event) {
 				e.System = &msg.SystemEvent{
 					Subtype: "rate_limit",
 					Message: fmt.Sprintf("rate limits: %d/%d requests, %d/%d tokens",
@@ -618,7 +623,7 @@ func (c *hermesClient) translateEvent(event sseEvent, bridgeSessionID, sessionID
 
 	default:
 		// Forward unknown event types as system events.
-		emitEvent(makeEvent(bridgeSessionID, sessionID, msg.EventSystem, raw, func(e *msg.Event) {
+		emitEvent(makeEvent(bridgeSessionID, harnessSessionID, msg.EventSystem, raw, func(e *msg.Event) {
 			e.System = &msg.SystemEvent{Subtype: event.Type}
 		}))
 	}

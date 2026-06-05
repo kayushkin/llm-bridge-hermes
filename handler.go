@@ -74,8 +74,8 @@ type harness struct {
 	cfg              Config
 	client           *hermesClient
 	bridgeSessionID  string // bridge-server's stable id; stamped on every event
-	sessionID        string // harness-side id (== bridgeSessionID for hermes — no native rotation)
-	conversation     string // Hermes conversation name for multi-turn
+	harnessSessionID string // harness-native id; empty unless a caller supplies one (resume). Never echoes the bridge id — the server rejects HarnessSessionID == BridgeSessionID.
+	conversation     string // Hermes conversation name for multi-turn (the real routing key; = bridgeSessionID on cold start)
 	lastRespID       string // last response ID for chaining
 	systemPrompt     string // sent as `instructions` on every turn
 	lastInput        string // for retry
@@ -184,20 +184,21 @@ func (h *harness) handleRequest(req request) error {
 }
 
 func (h *harness) handleStart(p startParams) error {
-	// Resolve session identity from canonical wire fields, falling back to
-	// the legacy SessionID. For hermes the harness-side id mirrors the
-	// bridge-side id (no native rotation), so absent an explicit
-	// HarnessSessionID we use the bridge id for both.
+	// Resolve the bridge-side id from canonical wire fields, falling back to
+	// the legacy SessionID for callers that have not migrated.
 	bridgeID := p.BridgeSessionID
 	if bridgeID == "" {
 		bridgeID = p.SessionID
 	}
-	harnessID := p.HarnessSessionID
-	if harnessID == "" {
-		harnessID = bridgeID
-	}
 	h.bridgeSessionID = bridgeID
-	h.sessionID = harnessID
+	// Hermes has no native session id it surfaces back through the
+	// OpenAI-compatible API, so the harness-side id stays empty unless a caller
+	// explicitly supplies one (e.g. resume). It must never fall back to the
+	// legacy SessionID (that is the bridge/routing id) or the bridge id itself:
+	// the server contract (llm-bridge-server manager.go) rejects
+	// HarnessSessionID == BridgeSessionID and logs loudly on every event. The
+	// conversation name below — not this field — carries Hermes's routing key.
+	h.harnessSessionID = p.HarnessSessionID
 
 	// Fork from bridge-server is rejected. Hermes fork is per-response
 	// (`previous_response_id`), not per-session — there is no server-side
@@ -206,7 +207,7 @@ func (h *harness) handleStart(p startParams) error {
 	// that hold a parent response id should use the explicit `fork` JSON-RPC
 	// method with `from_response_id` instead.
 	if p.Fork != "" {
-		emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+		emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventError, nil, func(e *msg.Event) {
 			e.Error = &msg.ErrorEvent{
 				Code:      "FORK_UNSUPPORTED",
 				Message:   "hermes does not support session-level fork; use the `fork` JSON-RPC method with `from_response_id`",
@@ -215,14 +216,15 @@ func (h *harness) handleStart(p startParams) error {
 		}))
 		return fmt.Errorf("fork unsupported on hermes start path")
 	}
-	if p.Resume {
+	if p.Resume && p.HarnessSessionID != "" {
 		// Canonical resume: bridge-server sends start{Resume:true} with the
 		// previous HarnessSessionID populated (Hermes's prior conversation name).
-		// Fall back to bridgeID if absent (harnessID resolves to bridgeID via
-		// the chain above), matching cold-start behavior.
-		h.conversation = harnessID
+		// Continue that conversation.
+		h.conversation = p.HarnessSessionID
 	} else {
-		h.conversation = bridgeID // cold start: Hermes conversation name = bridge session id
+		// Cold start (or resume without a prior id): the Hermes conversation
+		// name is the stable bridge session id.
+		h.conversation = bridgeID
 	}
 	h.systemPrompt = p.SystemPrompt
 	if p.Model != "" {
@@ -239,7 +241,7 @@ func (h *harness) handleStart(p startParams) error {
 	if h.cfg.CredentialID != "" {
 		key, err := resolveCredentialKey(h.cfg.CredentialID)
 		if err != nil {
-			emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+			emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventError, nil, func(e *msg.Event) {
 				e.Error = &msg.ErrorEvent{Code: "CREDENTIAL_ERROR", Message: err.Error()}
 			}))
 			return err
@@ -251,12 +253,12 @@ func (h *harness) handleStart(p startParams) error {
 	// Optional preflight — fail fast if the server isn't reachable.
 	if h.cfg.Preflight {
 		if err := h.client.healthCheck(h.ctx); err != nil {
-			emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+			emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventError, nil, func(e *msg.Event) {
 				e.Error = &msg.ErrorEvent{Code: "PREFLIGHT_FAIL", Message: err.Error()}
 			}))
 			return err
 		}
-		emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
+		emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 			e.System = &msg.SystemEvent{Subtype: "preflight_ok"}
 		}))
 	}
@@ -265,7 +267,7 @@ func (h *harness) handleStart(p startParams) error {
 	if !h.cfg.ModelExplicit {
 		ids, err := h.client.listModels(h.ctx)
 		if err != nil {
-			emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+			emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventError, nil, func(e *msg.Event) {
 				e.Error = &msg.ErrorEvent{Code: "MODEL_DISCOVERY_FAIL", Message: err.Error()}
 			}))
 			return err
@@ -274,7 +276,7 @@ func (h *harness) handleStart(p startParams) error {
 			return fmt.Errorf("hermes advertised no models via /v1/models")
 		}
 		h.cfg.Model = ids[0]
-		emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
+		emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 			e.System = &msg.SystemEvent{Subtype: "model_discovered", Message: h.cfg.Model}
 		}))
 	}
@@ -287,7 +289,9 @@ func (h *harness) handleStart(p startParams) error {
 }
 
 func (h *harness) handleMessage(p messageParams) error {
-	if h.sessionID == "" {
+	// bridgeSessionID is always set once a session has started; the harness-side
+	// id may legitimately be empty (Hermes has no native id), so it can't gate this.
+	if h.bridgeSessionID == "" {
 		return fmt.Errorf("no active session")
 	}
 
@@ -305,7 +309,7 @@ func (h *harness) handleMessage(p messageParams) error {
 // expose context compaction. Compaction is a CLI slash command (/compress)
 // with no documented HTTP trigger. We refuse to fake an ack.
 func (h *harness) handleCompact(p compactParams) error {
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventError, nil, func(e *msg.Event) {
 		e.Error = &msg.ErrorEvent{
 			Code:      "UNSUPPORTED",
 			Message:   "compact is not available on the Hermes /v1 HTTP API; Hermes manages context compression server-side",
@@ -321,7 +325,7 @@ func (h *harness) handleCompact(p compactParams) error {
 // Hermes maintains server-side conversation state via the conversation name,
 // so simply continuing turns against the restored conversation is enough.
 func (h *harness) handleResume() error {
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{Subtype: "resume", Message: "session resumed"}
 	}))
 	return nil
@@ -335,13 +339,13 @@ func (h *harness) handleInterrupt() error {
 	h.turnMu.Unlock()
 
 	if cancel == nil {
-		emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
+		emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 			e.System = &msg.SystemEvent{Subtype: "interrupt_noop", Message: "no in-flight turn"}
 		}))
 		return nil
 	}
 	cancel()
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{Subtype: "interrupt", Message: "turn cancelled"}
 	}))
 	return nil
@@ -354,7 +358,7 @@ func (h *harness) handleSetModel(p setModelParams) error {
 	previous := h.cfg.Model
 	h.cfg.Model = p.Model
 	h.cfg.ModelExplicit = true
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{Subtype: "model_changed", Message: fmt.Sprintf("%s -> %s", previous, p.Model)}
 	}))
 	return nil
@@ -370,7 +374,7 @@ func (h *harness) handleFork(p forkParams) error {
 	if p.Conversation != "" {
 		h.conversation = p.Conversation
 	}
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{
 			Subtype: "fork",
 			Message: fmt.Sprintf("forked from response %s (conversation=%s)", p.FromResponseID, h.conversation),
@@ -414,7 +418,7 @@ func (h *harness) handleGetResponse(p responseIDParams) error {
 		}
 	}
 
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventResult, nil, func(e *msg.Event) {
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventResult, nil, func(e *msg.Event) {
 		e.Result = &msg.ResultEvent{
 			Text:     text,
 			NumTurns: 0, // rehydrated — no new turns
@@ -441,7 +445,7 @@ func (h *harness) handleForgetResponse(p responseIDParams) error {
 	if err := h.client.deleteResponse(h.ctx, p.ID); err != nil {
 		return err
 	}
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventSystem, nil, func(e *msg.Event) {
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{Subtype: "response_deleted", Message: p.ID}
 	}))
 	return nil
@@ -494,14 +498,14 @@ func (h *harness) sendMessageDirect(content, idempotencyKey string) error {
 		req.Conversation = h.conversation
 	}
 	resp, err := h.client.sendResponses(turnCtx, req, sendOptions{
-		BridgeSessionID: h.bridgeSessionID,
-		SessionID:       h.sessionID,
-		IdempotencyKey:  idempotencyKey,
+		BridgeSessionID:  h.bridgeSessionID,
+		HarnessSessionID: h.harnessSessionID,
+		IdempotencyKey:   idempotencyKey,
 	})
 	if err != nil {
 		// Distinguish context cancellation (interrupt) from API errors.
 		if errors.Is(err, context.Canceled) {
-			emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+			emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventError, nil, func(e *msg.Event) {
 				e.Error = &msg.ErrorEvent{Code: "INTERRUPTED", Message: "turn cancelled", Retryable: false}
 			}))
 			return err
@@ -516,7 +520,7 @@ func (h *harness) sendMessageDirect(content, idempotencyKey string) error {
 			retryable = (statusCode >= 500 && statusCode < 600) || statusCode == 429
 		}
 
-		emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventError, nil, func(e *msg.Event) {
+		emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventError, nil, func(e *msg.Event) {
 			e.Error = &msg.ErrorEvent{
 				Code:       "API_ERROR",
 				Message:    err.Error(),
@@ -531,7 +535,7 @@ func (h *harness) sendMessageDirect(content, idempotencyKey string) error {
 	durationMS := time.Since(start).Milliseconds()
 
 	// Emit result.
-	emitEvent(makeEvent(h.bridgeSessionID, h.sessionID, msg.EventResult, nil, func(e *msg.Event) {
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventResult, nil, func(e *msg.Event) {
 		e.Result = &msg.ResultEvent{
 			Text:       resp.Text,
 			DurationMS: durationMS,

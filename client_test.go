@@ -529,8 +529,8 @@ func TestSendResponses_RequiresOptions(t *testing.T) {
 	}
 
 	_, err = c.sendResponses(t.Context(), responsesRequest{}, sendOptions{IdempotencyKey: "key"})
-	if err == nil || !strings.Contains(err.Error(), "SessionID required") {
-		t.Errorf("expected SessionID required error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "BridgeSessionID required") {
+		t.Errorf("expected BridgeSessionID required error, got: %v", err)
 	}
 }
 
@@ -581,8 +581,8 @@ func TestSendResponses_Headers(t *testing.T) {
 		Store:        true,
 		Conversation: "conv-1",
 	}, sendOptions{
-		SessionID:      "sess-abc",
-		IdempotencyKey: "idem-123",
+		BridgeSessionID: "sess-abc",
+		IdempotencyKey:  "idem-123",
 	})
 	if err != nil {
 		t.Fatalf("sendResponses: %v", err)
@@ -601,8 +601,8 @@ func TestSendResponses_HTTPError(t *testing.T) {
 
 	c := testClient(server.URL)
 	_, err := c.sendResponses(t.Context(), responsesRequest{}, sendOptions{
-		SessionID:      "sess",
-		IdempotencyKey: "key",
+		BridgeSessionID: "sess",
+		IdempotencyKey:  "key",
 	})
 	if err == nil {
 		t.Fatal("expected error")

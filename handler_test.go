@@ -60,7 +60,7 @@ func testHarness() *harness {
 		OutputPricePerM: 15.0,
 	}
 	h := newHarness(cfg)
-	h.sessionID = "test-session"
+	h.bridgeSessionID = "test-session"
 	h.conversation = "test-session"
 	return h
 }
@@ -323,8 +323,8 @@ func TestHandleStart_Resume(t *testing.T) {
 	if h.bridgeSessionID != "bs_xyz" {
 		t.Errorf("bridgeSessionID = %q, want bs_xyz", h.bridgeSessionID)
 	}
-	if h.sessionID != "cv_abc" {
-		t.Errorf("sessionID = %q, want cv_abc", h.sessionID)
+	if h.harnessSessionID != "cv_abc" {
+		t.Errorf("harnessSessionID = %q, want cv_abc (explicit HarnessSessionID is honored)", h.harnessSessionID)
 	}
 	if h.conversation != "cv_abc" {
 		t.Errorf("conversation = %q, want cv_abc (resume should restore HarnessSessionID)", h.conversation)
@@ -342,9 +342,10 @@ func TestHandleStart_Resume(t *testing.T) {
 	_ = getEvents()
 }
 
-// TestHandleStart_ColdStart verifies that cold start (Resume:false) ignores any
-// HarnessSessionID present in start params and uses BridgeSessionID as the
-// Hermes conversation name — preserving prior behavior.
+// TestHandleStart_ColdStart verifies that on cold start (Resume:false) the
+// Hermes conversation name is BridgeSessionID (an explicit HarnessSessionID is
+// not used for routing), while an explicit HarnessSessionID is still honored as
+// the stamped harness-side id — preserving prior routing behavior.
 func TestHandleStart_ColdStart(t *testing.T) {
 	h := testHarness()
 	getEvents := captureEvents(t)
@@ -361,8 +362,8 @@ func TestHandleStart_ColdStart(t *testing.T) {
 	if h.bridgeSessionID != "bs_xyz" {
 		t.Errorf("bridgeSessionID = %q, want bs_xyz", h.bridgeSessionID)
 	}
-	if h.sessionID != "cv_abc" {
-		t.Errorf("sessionID = %q, want cv_abc", h.sessionID)
+	if h.harnessSessionID != "cv_abc" {
+		t.Errorf("harnessSessionID = %q, want cv_abc (explicit HarnessSessionID is honored)", h.harnessSessionID)
 	}
 	if h.conversation != "bs_xyz" {
 		t.Errorf("conversation = %q, want bs_xyz (cold start uses bridgeID)", h.conversation)
@@ -373,8 +374,9 @@ func TestHandleStart_ColdStart(t *testing.T) {
 // TestHandleStart_ColdStart_WireProtocol exercises the full cold-start chain
 // against an httptest fake of Hermes: handleStart{BridgeSessionID:"bs_1"} with
 // no HarnessSessionID, then a turn. Asserts that every emitted event stamps
-// both BridgeSessionID and HarnessSessionID equal to "bs_1" (no harness-side
-// rotation in Hermes), and that the resulting POST /v1/responses carries
+// BridgeSessionID="bs_1" and leaves HarnessSessionID empty (Hermes has no
+// native session id, so it must not echo the bridge id), and that the
+// resulting POST /v1/responses carries
 // `conversation: bs_1` with no previous_response_id (first turn after cold
 // start). Companion to TestHandleStart_Resume.
 func TestHandleStart_ColdStart_WireProtocol(t *testing.T) {
@@ -421,8 +423,8 @@ func TestHandleStart_ColdStart_WireProtocol(t *testing.T) {
 	if h.bridgeSessionID != "bs_1" {
 		t.Errorf("bridgeSessionID = %q, want bs_1", h.bridgeSessionID)
 	}
-	if h.sessionID != "bs_1" {
-		t.Errorf("sessionID = %q, want bs_1 (no HarnessSessionID set, falls through to bridgeID)", h.sessionID)
+	if h.harnessSessionID != "" {
+		t.Errorf("harnessSessionID = %q, want empty (no HarnessSessionID set; Hermes has no native id and must not echo the bridge id)", h.harnessSessionID)
 	}
 	if h.conversation != "bs_1" {
 		t.Errorf("conversation = %q, want bs_1 (cold start uses bridgeID)", h.conversation)
@@ -447,8 +449,8 @@ func TestHandleStart_ColdStart_WireProtocol(t *testing.T) {
 		if ev.BridgeSessionID != "bs_1" {
 			t.Errorf("event[%d] BridgeSessionID = %q, want bs_1 (type=%s)", i, ev.BridgeSessionID, ev.Type)
 		}
-		if ev.HarnessSessionID != "bs_1" {
-			t.Errorf("event[%d] HarnessSessionID = %q, want bs_1 (type=%s)", i, ev.HarnessSessionID, ev.Type)
+		if ev.HarnessSessionID != "" {
+			t.Errorf("event[%d] HarnessSessionID = %q, want empty (no native id; never echoes bridge id) (type=%s)", i, ev.HarnessSessionID, ev.Type)
 		}
 	}
 }
@@ -505,8 +507,11 @@ func TestHandleStart_StoresParams(t *testing.T) {
 		t.Fatalf("handleStart: %v", err)
 	}
 
-	if h.sessionID != "sess-1" {
-		t.Errorf("sessionID = %q, want sess-1", h.sessionID)
+	if h.bridgeSessionID != "sess-1" {
+		t.Errorf("bridgeSessionID = %q, want sess-1", h.bridgeSessionID)
+	}
+	if h.harnessSessionID != "" {
+		t.Errorf("harnessSessionID = %q, want empty (legacy session_id is the bridge id, not a native harness id)", h.harnessSessionID)
 	}
 	if h.systemPrompt != "You are helpful" {
 		t.Errorf("systemPrompt = %q, want 'You are helpful'", h.systemPrompt)
