@@ -14,6 +14,13 @@ import (
 	"github.com/kayushkin/llm-bridge/msg"
 )
 
+// harnessIdentity is the identity this wrapper stamps on every event it emits and
+// every session it discovers. identity_test.go pins it to the rest of this
+// checkout's identity (module path, wrapper binary name). Named harnessIdentity
+// rather than the sibling wrappers' `harness` because that name is taken here by
+// the handler type below.
+const harnessIdentity = msg.HarnessHermes
+
 // request is the JSON-RPC request format from llm-bridge.
 type request struct {
 	Method string          `json:"method"`
@@ -575,7 +582,7 @@ func newIdempotencyKey() string {
 func makeEvent(bridgeSessionID, harnessSessionID string, eventType msg.EventType, raw json.RawMessage, fill func(*msg.Event)) msg.Event {
 	e := msg.Event{
 		Type:             eventType,
-		Harness:          msg.HarnessHermes,
+		Harness:          harnessIdentity,
 		BridgeSessionID:  bridgeSessionID,
 		HarnessSessionID: harnessSessionID,
 		Timestamp:        time.Now(),

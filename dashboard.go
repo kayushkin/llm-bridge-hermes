@@ -86,7 +86,7 @@ func toStoredSessions(sessions []hermesSession) []msg.StoredSession {
 	for _, s := range sessions {
 		out = append(out, msg.StoredSession{
 			HarnessSessionID: s.ID,
-			Harness:          msg.HarnessHermes,
+			Harness:          harnessIdentity,
 			Prompt:           s.Title,
 			CreatedAt:        s.CreatedAt,
 			UpdatedAt:        s.UpdatedAt,
