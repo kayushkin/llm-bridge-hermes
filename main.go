@@ -9,12 +9,16 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/kayushkin/llm-bridge/ndjson"
 )
 
 var emitMu sync.Mutex
@@ -82,12 +86,26 @@ func main() {
 		os.Exit(0)
 	}()
 
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+	// ndjson.ReadLine carries no practical line cap and reports an oversized
+	// line as its own error, so a single large request (a pasted image, a large
+	// tool result) no longer looks like a closed stdin and kills the session —
+	// the failure mode of the old bufio.Scanner, whose over-cap line ended the
+	// scan indistinguishably from EOF.
+	reader := bufio.NewReader(os.Stdin)
 
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
+		line, readErr := ndjson.ReadLine(reader, ndjson.MaxLineBytes)
+		if errors.Is(readErr, ndjson.ErrLineTooLong) {
+			log.Printf("dropping request line above %d bytes; session continues", ndjson.MaxLineBytes)
+			continue
+		}
 		if len(line) == 0 {
+			if readErr != nil {
+				if !errors.Is(readErr, io.EOF) {
+					log.Printf("stdin read error: %v", readErr)
+				}
+				break
+			}
 			continue
 		}
 
@@ -101,10 +119,6 @@ func main() {
 		if err := h.handleRequest(req); err != nil {
 			log.Printf("handler error: method=%s err=%v", req.Method, err)
 		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("stdin scanner error: %v", err)
 	}
 
 	log.Printf("stdin closed, shutting down")
