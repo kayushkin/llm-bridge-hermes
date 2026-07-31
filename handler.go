@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,6 +127,19 @@ func (h *harness) turnWorker() {
 }
 
 func (h *harness) handleRequest(req request) error {
+	// bridge-server delivers a mid-session config as the single method string
+	// "config:<json>" carrying a marshalled msg.ConfigSessionRequest, with no
+	// params (llm-bridge-server internal/server/sessions.go handleConfigSession
+	// → Manager.SendCommand). Nothing sends the bare method "config", and
+	// nothing sends "set_model" either — Manager.SendJSONRPC has no caller in
+	// that repo. Without this prefix branch every config the gateway sent fell
+	// through to the "unknown method" default below, was logged to this
+	// harness's own stderr and reached nobody. Same fix llm-bridge-jig made
+	// with strings.CutPrefix and llm-bridge-inber with normalizeConfigMethod.
+	if raw, ok := strings.CutPrefix(req.Method, "config:"); ok {
+		return h.handleConfig(raw)
+	}
+
 	switch req.Method {
 	case "start":
 		var p startParams
@@ -358,16 +372,87 @@ func (h *harness) handleInterrupt() error {
 	return nil
 }
 
+// applyModel pins the model every later turn is issued against and returns the
+// one it replaced. Both entry points that change a model mid-session — the
+// `set_model` JSON-RPC method and a "config:<json>" payload — go through here,
+// so neither can drift from the other on what "change the model" means.
+func (h *harness) applyModel(model string) string {
+	previous := h.cfg.Model
+	h.cfg.Model = model
+	// Pin it: a discovered model would otherwise be re-discovered and overwrite
+	// the caller's choice on the next start.
+	h.cfg.ModelExplicit = true
+	return previous
+}
+
 func (h *harness) handleSetModel(p setModelParams) error {
 	if p.Model == "" {
 		return fmt.Errorf("set_model: model required")
 	}
-	previous := h.cfg.Model
-	h.cfg.Model = p.Model
-	h.cfg.ModelExplicit = true
+	previous := h.applyModel(p.Model)
 	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
 		e.System = &msg.SystemEvent{Subtype: "model_changed", Message: fmt.Sprintf("%s -> %s", previous, p.Model)}
 	}))
+	return nil
+}
+
+// handleConfig applies the session config bridge-server sends mid-session. The
+// payload is a msg.ConfigSessionRequest — the type the server marshals — rather
+// than a local copy of its four fields, so a field added there cannot go
+// missing here.
+//
+// Model is the one field hermes can honour: sendMessageDirect reads h.cfg.Model
+// when it builds every /v1/responses turn, so a change takes effect on the next
+// turn of the session that is already running.
+//
+// Effort, max_budget and disabled_tools have no hermes-side setting to reach —
+// responsesRequest carries Model, Input, Instructions, Stream and Store and
+// nothing else — so they are named back to the caller the way llm-bridge-cline
+// names its own, rather than accepted and dropped.
+func (h *harness) handleConfig(raw string) error {
+	if raw == "" {
+		return fmt.Errorf("config: empty payload")
+	}
+	var params msg.ConfigSessionRequest
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		return fmt.Errorf("parse config payload: %w", err)
+	}
+
+	var applied, unsupported []string
+	if params.Model != "" {
+		previous := h.applyModel(params.Model)
+		applied = append(applied, fmt.Sprintf("model=%s (was %s)", params.Model, previous))
+	}
+	if params.Effort != "" {
+		unsupported = append(unsupported, "effort")
+	}
+	if params.MaxBudget != nil {
+		unsupported = append(unsupported, "max_budget")
+	}
+	if len(params.DisabledTools) > 0 {
+		unsupported = append(unsupported, "disabled_tools")
+	}
+
+	if len(applied) == 0 && len(unsupported) == 0 {
+		return fmt.Errorf("config: payload sets nothing (want model, effort, max_budget or disabled_tools)")
+	}
+
+	// Name what changed. A bare "config updated" leaves the caller unable to
+	// tell an applied field from one this harness refused.
+	subtype, message := "config_updated", strings.Join(applied, " ")+" (applies on the next turn)"
+	if len(applied) == 0 {
+		subtype, message = "config_ignored", "applied nothing"
+	}
+	if len(unsupported) > 0 {
+		message += "; not supported by hermes: " + strings.Join(unsupported, ", ")
+	}
+	emitEvent(makeEvent(h.bridgeSessionID, h.harnessSessionID, msg.EventSystem, nil, func(e *msg.Event) {
+		e.System = &msg.SystemEvent{Subtype: subtype, Message: message}
+	}))
+
+	if len(unsupported) > 0 {
+		return fmt.Errorf("config: hermes has no %s setting", strings.Join(unsupported, ", "))
+	}
 	return nil
 }
 

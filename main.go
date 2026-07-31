@@ -77,14 +77,21 @@ func main() {
 
 	h := newHarness(cfg)
 
+	// SIGINT is the whole interrupt contract. POST /sessions/{id}/interrupt is
+	// not a JSON-RPC method — bridge-server's Manager.Stop calls
+	// Process.Interrupt, which signals SIGINT, and Manager.SendJSONRPC (the only
+	// path that could deliver an `interrupt` method) has no caller in that repo.
+	// Having sent it the server marks the session idle and KEEPS the process
+	// registered, so the contract is "cancel the in-flight turn and stay alive".
+	// Shutting down here ended the whole session instead: pressing Stop on a
+	// hermes session killed the harness and every later message met a dead
+	// process. SIGTERM still means shut down.
+	//
+	// Range, not a single read: a second Stop in the same session used to sit
+	// unread in this channel and do nothing at all.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-sigs
-		log.Printf("received %v, shutting down", sig)
-		h.shutdown()
-		os.Exit(0)
-	}()
+	go watchSignals(h, sigs, func() { os.Exit(0) })
 
 	// ndjson.ReadLine carries no practical line cap and reports an oversized
 	// line as its own error, so a single large request (a pasted image, a large
@@ -123,4 +130,24 @@ func main() {
 
 	log.Printf("stdin closed, shutting down")
 	h.shutdown()
+}
+
+// watchSignals runs the interrupt contract until the signal channel closes.
+// terminate is what ends the process on SIGTERM; main passes os.Exit and the
+// test passes a recorder, because a handler that can only be observed by dying
+// cannot be pinned.
+func watchSignals(h *harness, sigs <-chan os.Signal, terminate func()) {
+	for sig := range sigs {
+		if sig == syscall.SIGINT {
+			log.Printf("received %v, cancelling the in-flight turn", sig)
+			if err := h.handleInterrupt(); err != nil {
+				log.Printf("interrupt: %v", err)
+			}
+			continue
+		}
+		log.Printf("received %v, shutting down", sig)
+		h.shutdown()
+		terminate()
+		return
+	}
 }
