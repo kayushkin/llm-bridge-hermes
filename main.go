@@ -80,8 +80,9 @@ func main() {
 	// SIGINT is the whole interrupt contract. POST /sessions/{id}/interrupt is
 	// not a JSON-RPC method — bridge-server's Manager.Stop calls
 	// Process.Interrupt, which signals SIGINT, and Manager.SendJSONRPC (the only
-	// path that could deliver an `interrupt` method) sends the literal method
-	// "compact" from its single caller, so no `interrupt` method is delivered.
+	// path that could deliver an `interrupt` method) has exactly one caller in
+	// that repo, which passes the literal method "compact" — so no `interrupt`
+	// method is ever delivered.
 	// ⚠️ A claim about another repository's caller graph; nothing here can
 	// notice it rot. Re-check it in llm-bridge-server rather than trusting it.
 	// Having sent it the server marks the session idle and KEEPS the process
