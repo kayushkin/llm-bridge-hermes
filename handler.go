@@ -131,8 +131,12 @@ func (h *harness) handleRequest(req request) error {
 	// "config:<json>" carrying a marshalled msg.ConfigSessionRequest, with no
 	// params (llm-bridge-server internal/server/sessions.go handleConfigSession
 	// → Manager.SendCommand). Nothing sends the bare method "config", and
-	// nothing sends "set_model" either — Manager.SendJSONRPC has no caller in
-	// that repo. Without this prefix branch every config the gateway sent fell
+	// nothing sends "set_model" either — Manager.SendJSONRPC has exactly one
+	// caller in that repo (sessions.go handleCompactSession) and it passes the
+	// literal method "compact". ⚠️ This sentence is a claim about ANOTHER
+	// repository's caller graph, so nothing here can notice it rot: no test, no
+	// build and no grep in this repo reads llm-bridge-server. Re-check it there
+	// rather than trusting it. Without this prefix branch every config the gateway sent fell
 	// through to the "unknown method" default below, was logged to this
 	// harness's own stderr and reached nobody. Same fix llm-bridge-jig made
 	// with strings.CutPrefix and llm-bridge-inber with normalizeConfigMethod.
