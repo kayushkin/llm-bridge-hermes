@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/kayushkin/llm-bridge/msg"
@@ -234,23 +235,30 @@ func (c *hermesClient) healthCheck(ctx context.Context) error {
 }
 
 // getResponse retrieves a stored response by ID.
+//
+// The id is percent-escaped because it is caller-supplied and lands in a path
+// segment. Unescaped, an id carrying "/", "?" or "#" addresses a different
+// endpoint than the one asked for, and does so silently: net/http strips a
+// fragment before the request leaves, and a query is not part of the path the
+// server routes on. PathEscape is a no-op for every well-formed Hermes id.
 func (c *hermesClient) getResponse(ctx context.Context, id string) (*responseObject, error) {
 	if id == "" {
 		return nil, fmt.Errorf("getResponse: id required")
 	}
 	var out responseObject
-	if err := c.doJSON(ctx, "GET", "/v1/responses/"+id, &out); err != nil {
+	if err := c.doJSON(ctx, "GET", "/v1/responses/"+url.PathEscape(id), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-// deleteResponse removes a stored response by ID.
+// deleteResponse removes a stored response by ID. The id is escaped for the
+// same reason as in getResponse.
 func (c *hermesClient) deleteResponse(ctx context.Context, id string) error {
 	if id == "" {
 		return fmt.Errorf("deleteResponse: id required")
 	}
-	return c.doJSON(ctx, "DELETE", "/v1/responses/"+id, nil)
+	return c.doJSON(ctx, "DELETE", "/v1/responses/"+url.PathEscape(id), nil)
 }
 
 // parseSSEStream reads SSE events from the Hermes streaming response and

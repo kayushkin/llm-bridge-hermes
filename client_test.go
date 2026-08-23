@@ -457,8 +457,11 @@ func TestHealthCheck(t *testing.T) {
 
 func TestGetResponse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/responses/resp-123" {
-			t.Errorf("path = %q, want /v1/responses/resp-123", r.URL.Path)
+		// RequestURI, not URL.Path: the server decodes %2F back to a slash in
+		// URL.Path, so a URL.Path assertion passes whether or not the client
+		// escaped the id, which is the one thing this is here to hold.
+		if r.RequestURI != "/v1/responses/resp-123" {
+			t.Errorf("request line = %q, want /v1/responses/resp-123", r.RequestURI)
 		}
 		json.NewEncoder(w).Encode(responseObject{
 			ID:     "resp-123",
@@ -506,8 +509,8 @@ func TestDeleteResponse(t *testing.T) {
 		if r.Method != "DELETE" {
 			t.Errorf("method = %s, want DELETE", r.Method)
 		}
-		if r.URL.Path != "/v1/responses/resp-456" {
-			t.Errorf("path = %q, want /v1/responses/resp-456", r.URL.Path)
+		if r.RequestURI != "/v1/responses/resp-456" {
+			t.Errorf("request line = %q, want /v1/responses/resp-456", r.RequestURI)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -613,5 +616,54 @@ func TestSendResponses_HTTPError(t *testing.T) {
 	}
 	if apiErr.StatusCode != 429 {
 		t.Errorf("StatusCode = %d, want 429", apiErr.StatusCode)
+	}
+}
+
+// TestResponseIDStaysOnePathSegment pins the escaping of a caller-supplied response
+// id. Every case here reached a DIFFERENT endpoint than the one asked for before
+// url.PathEscape was added, and none of it was visible: a fragment is stripped by
+// net/http before the request is sent, a query is not part of the path the server
+// routes on, and a raw slash silently becomes an extra path segment.
+func TestResponseIDStaysOnePathSegment(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{"plain id is unchanged", "resp-123", "/v1/responses/resp-123"},
+		{"slash does not become a second segment", "a/b", "/v1/responses/a%2Fb"},
+		{"traversal cannot climb out of the collection", "../v1/models", "/v1/responses/..%2Fv1%2Fmodels"},
+		{"question mark does not become a query", "resp?x=1", "/v1/responses/resp%3Fx=1"},
+		{"hash is not dropped as a fragment", "resp#frag", "/v1/responses/resp%23frag"},
+		{"space is escaped", "resp 123", "/v1/responses/resp%20123"},
+		{"an id that is already escaped is escaped again, not decoded", "resp%2Fb", "/v1/responses/resp%252Fb"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.RequestURI
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(responseObject{ID: "x"})
+			}))
+			defer srv.Close()
+
+			c := testClient(srv.URL)
+			if _, err := c.getResponse(t.Context(), tc.id); err != nil {
+				t.Fatalf("getResponse(%q): %v", tc.id, err)
+			}
+			if got != tc.want {
+				t.Errorf("getResponse(%q) request line = %q, want %q", tc.id, got, tc.want)
+			}
+
+			got = ""
+			if err := c.deleteResponse(t.Context(), tc.id); err != nil {
+				t.Fatalf("deleteResponse(%q): %v", tc.id, err)
+			}
+			if got != tc.want {
+				t.Errorf("deleteResponse(%q) request line = %q, want %q", tc.id, got, tc.want)
+			}
+		})
 	}
 }
