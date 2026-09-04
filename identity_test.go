@@ -22,10 +22,11 @@ import (
 // These are independent constants. Every wrapper in this family was created by
 // cloning an existing one, which copies them all verbatim, and any one left
 // un-retargeted silently points this harness at a different harness: it answers
-// to that harness's name on the bus, or overwrites its installed binary. Both
-// shipped in llm-bridge-copilotcli (a claudecode clone) and neither was caught by
-// a build or a test, because the wrong values all agreed with each other — only
-// the checkout directory disagreed, which is why it is the anchor here.
+// to that harness's name on the bus, or overwrites its installed binary. Three
+// of these four shipped wrong in llm-bridge-copilotcli (a claudecode clone) and
+// none was caught by a build or a test, because the wrong values all agreed with
+// each other — only the checkout directory disagreed, which is why it is the
+// anchor here.
 //
 // Wrappers that carry a state.db (claudecode, codex, jig) pin its directory too;
 // this one holds no session-chain state, so there is no state leg to check.
