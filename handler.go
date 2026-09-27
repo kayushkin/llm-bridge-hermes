@@ -128,9 +128,10 @@ func (h *harness) turnWorker() {
 
 func (h *harness) handleRequest(req request) error {
 	// bridge-server delivers a mid-session config as the single method string
-	// "config:<json>" carrying a marshalled msg.ConfigSessionRequest, with no
-	// params (llm-bridge-server internal/server/sessions.go handleConfigSession
-	// → Manager.SendCommand). Nothing sends the bare method "config", and
+	// "config:<json>" carrying a marshalled msg.ConfigSessionRequest, with params
+	// that hold only bridge_session_id (llm-bridge-server
+	// internal/server/sessions.go handleConfigSession → Manager.SendCommand →
+	// Process.SendCommand). Nothing sends the bare method "config", and
 	// nothing sends "set_model" either — Manager.SendJSONRPC has exactly one
 	// caller in that repo (sessions.go handleCompactSession) and it passes the
 	// literal method "compact". ⚠️ This sentence is a claim about ANOTHER

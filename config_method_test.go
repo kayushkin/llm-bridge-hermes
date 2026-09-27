@@ -13,8 +13,10 @@ import (
 )
 
 // configMethod builds the method string bridge-server actually puts on the
-// wire: "config:" followed by a marshalled msg.ConfigSessionRequest, with no
-// params (llm-bridge-server internal/server/sessions.go handleConfigSession).
+// wire: "config:" followed by a marshalled msg.ConfigSessionRequest
+// (llm-bridge-server internal/server/sessions.go handleConfigSession). The
+// params carry only bridge_session_id (internal/harness/process.go SendCommand),
+// and the config branch does not read them.
 // Building it from the canonical type rather than a hand-written literal is
 // what makes these tests fail if that wire shape ever changes.
 func configMethod(t *testing.T, req msg.ConfigSessionRequest) string {
